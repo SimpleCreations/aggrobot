@@ -133,8 +133,10 @@ const AggroBot = class {
         if (this._responseQueue[0] && this._responseQueue[0].discardOnMessage) {
             clearTimeout(this._readTimeout);
             clearTimeout(this._typeTimeout);
+            clearTimeout(this._interruptedTimeout);
             this._readTimeout = null;
             this._typeTimeout = null;
+            this._interruptedTimeout = null;
             this._resetInactiveTimeout();
             queueUpdated = true;
         }
@@ -165,7 +167,7 @@ const AggroBot = class {
         }
         else {
             // Добавляем в очередь новый первичный ответ, если бот не занят
-            if(!this._responseQueue[0]) {
+            if (!this._responseQueue[0]) {
                 const queued = new AggroBot.QueuedResponse(AggroBase.primary[Math.floor(Math.random() * AggroBase.primary.length)]);
                 queued.readDelay = AggroBot.getTimeToRead(request);
                 this._enqueueResponse(queued);
