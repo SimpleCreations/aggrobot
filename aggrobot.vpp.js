@@ -331,12 +331,43 @@ AggroBot.QueuedResponse = class {
      * @param {string} message
      */
     constructor(message) {
+
+        /**
+         * Сообщение
+         * @type {string}
+         */
         this.message = message;
+
+        /**
+         * Время, необходимое для чтения запроса
+         * @type {number}
+         */
         this.readDelay = 0;
+
+        /**
+         * Время, необходимое для печати ответа
+         * @type {number}
+         */
         this.typeDelay = AggroBot.getTimeToType(message);
+
+        /**
+         * Флаг: будет ли чтение или набор прервано новым сообщением от собеседника
+         * @type {boolean}
+         */
         this.interruptOnMessage = true;
+
+        /**
+         * Флаг: будет ли чтение или набор прервано статусом печати от собеседника
+         * @type {boolean}
+         */
         this.interruptOnTyping = true;
+
+        /**
+         * Флаг: будет ли отправка данного ответа отменена при получении сообщения от собеседника
+         * @type {boolean}
+         */
         this.discardOnMessage = false;
+
     }
 
 };
