@@ -2,28 +2,109 @@
 // @name            AggroBot
 // @version         0.1.0
 // @script-filename aggrobot.vpp.js
-// @update-url      https://raw.githubusercontent.com/SimpleCreations/aggrobot/master/update.json
-// @script-url      https://raw.githubusercontent.com/SimpleCreations/aggrobot/master/aggrobot.vpp.js
+// @update-url      https://raw.githubusercontent.com/SimpleCreations/aggrobot/Release-1/update.json
+// @script-url      https://raw.githubusercontent.com/SimpleCreations/aggrobot/Release-1/aggrobot.vpp.js
+// @database-url    https://raw.githubusercontent.com/SimpleCreations/aggrobot/Release-1/database.json
 // ==/VPPScript==
 
-VPP.chats[0].log("[AggroBot] Проверка обновлений...");
+const log = message => VPP.chats[0].log(`[AggroBot] ${message}`);
+
+log("Проверка обновлений...");
 $.ajax({
     url: VPPScript.meta["update-url"],
     dataType: "json",
     cache: false
 })
     .pipe(response => response["script_version"] ? response : $.Deferred().reject())
-    .done(response => VPP.chats[0].log(response["script_version"] > VPPScript.meta["version"] ?
+    .done(response => {
 
-        `[AggroBot] Вы используете устаревший скрипт.<br>
-    Текущая версия: ${VPPScript.meta["version"]}<br>
-    Последняя версия: ${response["script_version"]}<br>
-    Введите "/aggrobot download", чтобы скачать последнюю версию.` :
+        log(response["script_version"] > VPPScript.meta["version"] ?
 
-        `[AggroBot] Вы используете последнюю версию скрипта.`
+            `Вы используете устаревший скрипт.<br>
+Текущая версия: ${VPPScript.meta["version"]}<br>
+Последняя версия: ${response["script_version"]}<br>
+Введите "/aggrobot download", чтобы скачать последнюю версию.` :
 
-    ))
-    .fail(() => VPP.chats[0].log("[AggroBot] Не удалось получить данные об обновлении."));
+            `Вы используете последнюю версию скрипта.`
+
+        );
+
+        if (!response["database_version"]) return log("Не удалось получить последнюю версию базы сообщений.");
+        const currentDatabaseVersion = VPPScript.storage.databaseVersion;
+        if (!currentDatabaseVersion || response["database_version"] > currentDatabaseVersion) {
+
+            log(!currentDatabaseVersion ? "Идёт скачивание базы сообщений..." : "Идёт обновление базы сообщений...");
+            $.ajax({
+                url: VPPScript.meta["database-url"],
+                dataType: "json",
+                cache: false
+            })
+                .done(database => {
+                    VPPScript.storage.database = database;
+                    VPPScript.storage.databaseVersion = response["database_version"];
+                    VPPScript.storage.save();
+                    log("База сообщений успешно " + (!currentDatabaseVersion ? "загружена." : "обновлена."));
+                    enableScript();
+                })
+                .fail(() => {
+                    log("Не удалось скачать базу сообщений.");
+                    if (currentDatabaseVersion) enableScript();
+                });
+
+            VPP.chats.forEach(chat =>
+                chat.addEventListener(VPP.Chat.Event.CONNECTED, "aggrobot", () =>
+                    chat.log("[AggroBot] Скрипт начнёт работу только по завершении загрузки базы сообщений.")));
+
+        }
+        else enableScript();
+
+    })
+    .fail(() => log("Не удалось получить данные об обновлении."));
+
+const enableScript = () => {
+
+    VPP.chats.forEach(chat => {
+
+        const aggroBot = new AggroBot();
+        aggroBot.onTypingStart = () => chat.isChatStarted() && chat.setStartedTyping();
+        aggroBot.onTypingFinish = () => chat.isChatStarted() && chat.setFinishedTyping();
+        aggroBot.onMessageReady = message => chat.isChatStarted() && chat.sendMessage(message);
+        aggroBot.onConversationFinish = () => chat.isChatStarted() && chat.close();
+
+        chat.removeEventListener("aggrobot");
+        chat.addEventListener(VPP.Chat.Event.CONNECTED, "aggrobot", () => {
+
+            // Генерируем новое состояние бота и готовим приветственное сообщение
+            aggroBot.reset();
+            aggroBot.prepareResponse();
+
+        });
+
+        chat.addEventListener(VPP.Chat.Event.MESSAGE_RECEIVED, "aggrobot", (type, content) => {
+
+            const text = type === VPP.Chat.MessageType.TEXT ? content : "";
+            aggroBot.receiveMessage(text);
+            aggroBot.prepareResponse(text);
+
+        });
+
+        chat.addEventListener(VPP.Chat.Event.USER_STARTED_TYPING, "aggrobot", () => {
+
+            // Если собеседник начал печатать во время ответа бота, бот на короткое время "отвлекается" от набора текста
+            aggroBot.waitForOpponent();
+
+        });
+
+        chat.addEventListener(VPP.Chat.Event.DISCONNECTED, "aggrobot", () => {
+
+            chat.setFinishedTyping();
+            aggroBot.suspend();
+
+        });
+
+    });
+
+};
 
 // В целях тестирования
 const AggroBase = {
@@ -416,46 +497,6 @@ Object.assign(AggroBot, {
      * Вероятность написания первичного ответа
      */
     CHANCE_SECONDARY: 0.25
-
-});
-
-VPP.chats.forEach(chat => {
-
-    const aggroBot = new AggroBot();
-    aggroBot.onTypingStart = () => chat.isChatStarted() && chat.setStartedTyping();
-    aggroBot.onTypingFinish = () => chat.isChatStarted() && chat.setFinishedTyping();
-    aggroBot.onMessageReady = message => chat.isChatStarted() && chat.sendMessage(message);
-    aggroBot.onConversationFinish = () => chat.isChatStarted() && chat.close();
-
-    chat.addEventListener(VPP.Chat.Event.CONNECTED, "aggrobot", () => {
-
-        // Генерируем новое состояние бота и готовим приветственное сообщение
-        aggroBot.reset();
-        aggroBot.prepareResponse();
-
-    });
-
-    chat.addEventListener(VPP.Chat.Event.MESSAGE_RECEIVED, "aggrobot", (type, content) => {
-
-        const text = type === VPP.Chat.MessageType.TEXT ? content : "";
-        aggroBot.receiveMessage(text);
-        aggroBot.prepareResponse(text);
-
-    });
-
-    chat.addEventListener(VPP.Chat.Event.USER_STARTED_TYPING, "aggrobot", () => {
-
-        // Если собеседник начал печатать во время ответа бота, бот на короткое время "отвлекается" от набора текста
-        aggroBot.waitForOpponent();
-
-    });
-
-    chat.addEventListener(VPP.Chat.Event.DISCONNECTED, "aggrobot", () => {
-
-        chat.setFinishedTyping();
-        aggroBot.suspend();
-
-    });
 
 });
 
