@@ -63,9 +63,13 @@ $.ajax({
 
 const enableScript = () => {
 
+    let firstDatabase = null;
     VPP.chats.forEach(chat => {
 
         const aggroBot = new AggroBot();
+        const database = !firstDatabase ? (firstDatabase = AggroBot.Database.fromRaw(VPPScript.storage.database)) :
+            AggroBot.Database.fromAnother(firstDatabase);
+        aggroBot.setDatabase(database);
         aggroBot.onTypingStart = () => chat.isChatStarted() && chat.setStartedTyping();
         aggroBot.onTypingFinish = () => chat.isChatStarted() && chat.setFinishedTyping();
         aggroBot.onMessageReady = message => chat.isChatStarted() && chat.sendMessage(message);
@@ -106,31 +110,6 @@ const enableScript = () => {
 
 };
 
-// В целях тестирования
-const AggroBase = {
-    greetings: [
-        "привет1",
-        "привет2",
-        "привет3",
-        "привет4",
-        "привет5"
-    ],
-    primary: [
-        "тест1",
-        "тест2",
-        "тест3",
-        "тест4",
-        "тест5"
-    ],
-    secondary: [
-        "т1",
-        "т2",
-        "т3",
-        "т4",
-        "т5"
-    ]
-};
-
 const AggroBot = class {
 
     /**
@@ -139,6 +118,8 @@ const AggroBot = class {
     reset() {
 
         this.suspend();
+
+        if (this._database) this._database.reset();
 
         /**
          * ID таймеров различных откладываемых действий
@@ -185,6 +166,16 @@ const AggroBot = class {
          * @private
          */
         this._userProfile = new AggroBot.UserProfile();
+
+    }
+
+    /**
+     * Устанавливает базу сообщений бота
+     * @param {AggroBot.Database} database
+     */
+    setDatabase(database) {
+
+        this._database = database;
 
     }
 
@@ -242,18 +233,18 @@ const AggroBot = class {
         if (!this._greeted) {
             this._greeted = true;
             // Здесь и далее выбор ответа в таком виде временный и не имеет ничего общего с выбором в более поздней версии
-            const queued = new AggroBot.QueuedResponse(AggroBase.greetings[Math.floor(Math.random() * AggroBase.greetings.length)]);
+            const queued = new AggroBot.QueuedResponse(this._database.greetings.getRandom().string);
             queued.discardOnMessage = true;
             this._enqueueResponse(queued);
         }
         else {
             // Добавляем в очередь новый первичный ответ, если бот не занят
             if (!this._responseQueue[0]) {
-                const queued = new AggroBot.QueuedResponse(AggroBase.primary[Math.floor(Math.random() * AggroBase.primary.length)]);
+                const queued = new AggroBot.QueuedResponse(this._database.primary.getRandom().string);
                 queued.readDelay = AggroBot.getTimeToRead(request);
                 this._enqueueResponse(queued);
                 while (Math.random() < AggroBot.CHANCE_SECONDARY) {
-                    const queued = new AggroBot.QueuedResponse(AggroBase.secondary[Math.floor(Math.random() * AggroBase.secondary.length)]);
+                    const queued = new AggroBot.QueuedResponse(this._database.secondary.getRandom().string);
                     queued.interruptOnTyping = false;
                     queued.discardOnMessage = true;
                     this._enqueueResponse(queued);
@@ -450,6 +441,148 @@ AggroBot.QueuedResponse = class {
          * @type {boolean}
          */
         this.discardOnMessage = false;
+
+    }
+
+};
+
+/**
+ * База сообщений бота
+ * @class
+ */
+AggroBot.Database = class {
+
+    /**
+     * Генерирует новое состояние базы сообщений
+     */
+    reset() {
+
+        Object.keys(this).forEach(key => this[key].reset());
+
+    }
+
+};
+
+Object.assign(AggroBot.Database, {
+
+    /**
+     * Создает базу сообщений на основе сырого объекта с сообщениями
+     * @param {Object} raw
+     * @returns {AggroBot.Database}
+     */
+    fromRaw(raw) {
+
+        const database = new AggroBot.Database();
+        Object.keys(raw).forEach(key => {
+            const set = new AggroBot.ResponseSet();
+            raw[key].forEach(string => set.add(new AggroBot.Response(new String(string))));
+            database[key] = set;
+        });
+
+        return database;
+
+    },
+
+    /**
+     * Создает базу сообщений на основе другой базы сообщений
+     * @param {AggroBot.Database} anotherDatabase
+     * @returns {AggroBot.Database}
+     */
+    fromAnother(anotherDatabase) {
+
+        const database = new AggroBot.Database();
+        Object.keys(anotherDatabase).forEach(key => {
+            const set = new AggroBot.ResponseSet();
+            anotherDatabase[key].forEach(response => set.add(new AggroBot.Response(response.string)));
+            database[key] = set;
+        });
+
+        return database;
+
+    }
+
+});
+
+/**
+ * Множество ответов бота
+ * @class
+ */
+AggroBot.ResponseSet = class {
+
+    /**
+     * @constructor
+     */
+    constructor() {
+
+        this._array = [];
+        this._totalAvailable = 0;
+
+    }
+
+    /**
+     * Добавляет ответ
+     * @param response
+     */
+    add(response) {
+
+        this._array.push(response);
+        this._totalAvailable++;
+
+    }
+
+    /**
+     * Генерирует новое состояние ответов
+     */
+    reset() {
+
+        this._totalAvailable = this._array.length;
+        this._array.forEach(response => response.used = false);
+
+    }
+
+    /**
+     * Возвращает случайный ответ из множества
+     * @returns {AggroBot.Response}
+     */
+    getRandom() {
+
+        const index = Math.floor(Math.random() * this._totalAvailable);
+        let counter = 0;
+        for (let response of this._array) if (!response.used) {
+            if (index == counter) {
+                response.used = true;
+                return response;
+            }
+            counter++;
+        }
+
+    }
+
+};
+
+/**
+ * Ответ бота
+ * @class
+ */
+AggroBot.Response = class {
+
+    /**
+     * @constructor
+     * @param {String} string Текст ответа
+     */
+    constructor(string) {
+
+        /**
+         * Текст ответа
+         * @type {String}
+         */
+        this.string = string;
+
+        /**
+         * Использован ли ответ
+         * @type {boolean}
+         */
+        this.used = false;
 
     }
 
