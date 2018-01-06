@@ -74,6 +74,7 @@ const enableScript = () => {
         aggroBot.onTypingFinish = () => chat.isChatStarted() && chat.setFinishedTyping();
         aggroBot.onMessageReady = message => chat.isChatStarted() && chat.sendMessage(message);
         aggroBot.onConversationFinish = () => chat.isChatStarted() && chat.close();
+        aggroBot.onReport = message => chat.log(message);
 
         chat.removeEventListener("aggrobot");
         chat.addEventListener(VPP.Chat.Event.CONNECTED, "aggrobot", () => {
@@ -195,7 +196,10 @@ const AggroBot = class {
      * Уведомляет бота о том, что ему отослали сообщение
      * @param {string} request Сообщение от собеседника
      */
-    receiveMessage(request = "") {
+    receiveMessage(request) {
+
+        // Пытаемся определить пол
+        this._determineGender(request);
 
         // Полученное сообщение считается активностью, поэтому сбрасываем счётчик
         this._inactivityCounter = 0;
@@ -232,22 +236,27 @@ const AggroBot = class {
 
         if (!this._greeted) {
             this._greeted = true;
-            // Здесь и далее выбор ответа в таком виде временный и не имеет ничего общего с выбором в более поздней версии
-            const queued = new AggroBot.QueuedResponse(this._database.greetings.getRandom().string);
-            queued.discardOnMessage = true;
-            this._enqueueResponse(queued);
+            this._getResponse("greetings").forEach(response => {
+                const queued = new AggroBot.QueuedResponse(response);
+                queued.discardOnMessage = true;
+                this._enqueueResponse(queued);
+            });
         }
         else {
             // Добавляем в очередь новый первичный ответ, если бот не занят
             if (!this._responseQueue[0]) {
-                const queued = new AggroBot.QueuedResponse(this._database.primary.getRandom().string);
-                queued.readDelay = AggroBot.getTimeToRead(request);
-                this._enqueueResponse(queued);
-                while (Math.random() < AggroBot.CHANCE_SECONDARY) {
-                    const queued = new AggroBot.QueuedResponse(this._database.secondary.getRandom().string);
-                    queued.interruptOnTyping = false;
-                    queued.discardOnMessage = true;
+                this._getResponse("primary").forEach((response, index) => {
+                    const queued = new AggroBot.QueuedResponse(response);
+                    if (!index) queued.readDelay = AggroBot.getTimeToRead(request);
                     this._enqueueResponse(queued);
+                });
+                while (Math.random() < AggroBot.CHANCE_SECONDARY) {
+                    this._getResponse("secondary").forEach(response => {
+                        const queued = new AggroBot.QueuedResponse(response);
+                        queued.interruptOnTyping = false;
+                        queued.discardOnMessage = true;
+                        this._enqueueResponse(queued);
+                    });
                 }
             }
         }
@@ -285,6 +294,11 @@ const AggroBot = class {
      * Вызывается, когда бот инициирует завершение чата
      */
     onConversationFinish() {}
+
+    /**
+     * Вызывается, когда бот посылает отчётную информацию
+     */
+    onReport() {}
 
     /**
      * Форсирует проверку очереди сообщений
@@ -392,7 +406,120 @@ const AggroBot = class {
 
     }
 
+    /**
+     * Возвращает случайный ответ из базы сообщений по ключу
+     * @param {string} databaseKey
+     * @returns {Array<string>}
+     * @private
+     */
+    _getResponse(databaseKey) {
+
+        const string = this._database[databaseKey].getRandom().string;
+        const result = [];
+
+        // Парсим функции и флаги внутри сообщения
+        // Временно: удаляем $
+        const message = string.replace(/%(\w+)(?:\(([^,)]*(?:,[^,)]*)*)\))?/g, (_, name, args) => {
+
+            args = args ? args.split(",") : [];
+
+            switch (name) {
+                case "g":
+                case "gender":
+                    return (this._userProfile.gender === AggroBot.UserProfile.Gender.MALE ? args[0] : args[1]) || "";
+            }
+
+            return "";
+
+        }).replace(/[$@]\w+/g, "");
+
+        // Обрабатываем разбиения
+        message.split(" // ").forEach(part => {
+            let buffer;
+            part.split(" / ").forEach(part => {
+                if (!buffer) buffer = part;
+                else if (Math.random() < AggroBot.getSplitChanceByCurrentPart(buffer)) {
+                    result.push(buffer);
+                    buffer = part;
+                }
+                else buffer += part;
+            });
+            result.push(buffer);
+        });
+
+        return result;
+
+    }
+
+    /**
+     * Пытается определить пол по сообщению и записать в профиль
+     * @param message
+     * @private
+     */
+    _determineGender(message) {
+
+        let gender;
+        if (/(^|[^а-яё])(я?([мmп]|парень?|пацан|мальчик|муж(ик|чина)?)|я\s+[а-яё]+ый)($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|^[^а-яё]*((я|меня)\s+)?(Александр|Алексей|Леша|Леха|Андрей|Антон|Артем|Артур|Ваня|Василий|Вася|Виктор|Витя|Виталий|Владимир|Вова|Влад|Глеб|Григорий|Гриша|Даниил|Данила|Денис|Дмитрий|Дима|Евгений|Егор|Иван|Игорь|Илья|Кирилл|Костя|Макс|Матвей|Михаил|Миша|Никита|Николай|Коля|Олег|Павел|Паша|Рома|Семен|Сема|Сергей|Стас|Тимур|Юрий|Юра)[^а-яё?]*$/i.test(message)) {
+            gender = AggroBot.UserProfile.Gender.MALE;
+        }
+        else if (/(^|[^а-яё])(я?([жд]|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)|я\s+[а-яё]+ая)($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|^[^а-яё]*((я|меня)\s+)?(Александра|Алина|Алиса|Алла|Анастасия|Настя|Анна|Аня|Валерия|Вера|Виктория|Вика|Галя|Дарья|Даша|Диана|Ева|Евгения|Екатерина|Катя|Елена|Лена|Елизавета|Лиза|Ира|Ирина|Карина|Кира|Кристина|Ксения|Ксюша|Лариса|Лида|Лилия|Люба|Людмила|Люда|Маргарита|Рита|Марина|Мария|Маша|Милена|Надежда|Надя|Наталья|Наташа|Ника|Нина|Оксана|Олеся|Ольга|Оля|Полина|Светлана|Света|Софья|Соня|Татьяна|Таня|Ульяна|Юлия|Юля|Яна)[^а-яё?]*$/i.test(message)) {
+            gender = AggroBot.UserProfile.Gender.FEMALE;
+        }
+
+        if (gender !== undefined) {
+            this._userProfile.gender = gender;
+            this.onReport("Определён пол: " + (gender === AggroBot.UserProfile.Gender.MALE ? "мужской" : "женский"));
+        }
+
+    }
+
 };
+
+Object.assign(AggroBot, {
+
+    /**
+     * Возвращает время, необходимое для чтения сообщения, мс
+     * @param {string} message
+     * @returns {number}
+     */
+    getTimeToRead(message) {
+        return 850 + 350 * (message + " ").match(/\s+/g).length;
+    },
+
+    /**
+     * Возвращает время, необходимое для печати сообщения, мс
+     * @param {string} message
+     * @returns {number}
+     */
+    getTimeToType(message) {
+        return 500 + 210 * message.length;
+    },
+
+    /**
+     * Время, на которое бот прерывается, когда замечает, что собеседник печатает, мс
+     */
+    TIME_WAIT: 4000,
+
+    /**
+     * Время, в течение которого бот ждёт пользователя, прежде чем реагировать на его неактивность, мс
+     */
+    TIME_INCREMENT_INACTIVE_COUNTER: 15000,
+
+    /**
+     * Вероятность написания первичного ответа
+     */
+    CHANCE_SECONDARY: 0.275,
+
+    /**
+     * Возвращает вероятность разбиения сообщения при переданной текущей неразбитой части
+     * @param message
+     * @returns {number}
+     */
+    getSplitChanceByCurrentPart(message) {
+        return 2 / (1 + Math.exp(-0.044 * message.length)) + 1
+    }
+
+});
 
 /**
  * Представляет отложенный в очередь ответ бота
@@ -556,6 +683,9 @@ AggroBot.ResponseSet = class {
             counter++;
         }
 
+        this.reset();
+        return this.getRandom();
+
     }
 
 };
@@ -594,43 +724,26 @@ AggroBot.Response = class {
  */
 AggroBot.UserProfile = class {
 
+    constructor() {
+
+        /**
+         * Пол
+         * @type {AggroBot.UserProfile.Gender}
+         */
+        this.gender = AggroBot.UserProfile.Gender.MALE;
+
+    }
+
 };
 
-Object.assign(AggroBot, {
-
-    /**
-     * Возвращает время, необходимое для чтения сообщения, мс
-     * @param {string} message
-     * @returns {number}
-     */
-    getTimeToRead(message) {
-        return 850 + 400 * (message + " ").match(/\s+/g).length;
-    },
-
-    /**
-     * Возвращает время, необходимое для печати сообщения, мс
-     * @param {string} message
-     * @returns {number}
-     */
-    getTimeToType(message) {
-        return 500 + 250 * message.length;
-    },
-
-    /**
-     * Время, на которое бот прерывается, когда замечает, что собеседник печатает, мс
-     */
-    TIME_WAIT: 4000,
-
-    /**
-     * Время, в течение которого бот ждёт пользователя, прежде чем реагировать на его неактивность, мс
-     */
-    TIME_INCREMENT_INACTIVE_COUNTER: 15000,
-
-    /**
-     * Вероятность написания первичного ответа
-     */
-    CHANCE_SECONDARY: 0.25
-
+/**
+ * Гендеры
+ * @enum
+ * @readonly
+ */
+AggroBot.UserProfile.Gender = Object.freeze({
+    MALE: 0,
+    FEMALE: 1
 });
 
 VPP.Chat.prototype.aggrobot = (command, ...args) => {
