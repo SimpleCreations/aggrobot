@@ -162,6 +162,13 @@ const AggroBot = class {
         this._greeted = false;
 
         /**
+         * Установлено в true, если бот ещё не писал сообщение с момента получения последнего сообщения от собеседника
+         * @type {boolean}
+         * @private
+         */
+        this._directResponse = false;
+
+        /**
          * Информация о пользователе
          * @type {AggroBot.UserProfile}
          * @private
@@ -203,6 +210,8 @@ const AggroBot = class {
 
         // Полученное сообщение считается активностью, поэтому сбрасываем счётчик
         this._inactivityCounter = 0;
+
+        this._directResponse = true;
 
         // Смотрим, есть ли в очереди ответы, которые должны быть удалены из очереди во время получения сообщения
         let queueUpdated = false;
@@ -339,6 +348,7 @@ const AggroBot = class {
         this._typeTimeout = null;
         this.onTypingFinish();
         this.onMessageReady(this._responseQueue.shift().message);
+        this._directResponse = false;
         this._setQueueUpdated();
 
     }
@@ -419,6 +429,7 @@ const AggroBot = class {
 
         // Парсим функции и флаги внутри сообщения
         // Временно: удаляем $
+        let retry = false;
         const message = string.replace(/%(\w+)(?:\(([^,)]*(?:,[^,)]*)*)\))?/g, (_, name, args) => {
 
             args = args ? args.split(",") : [];
@@ -427,11 +438,20 @@ const AggroBot = class {
                 case "g":
                 case "gender":
                     return (this._userProfile.gender === AggroBot.UserProfile.Gender.MALE ? args[0] : args[1]) || "";
+                case "d":
+                case "direct":
+                    if (!this._directResponse) retry = true;
+                    break;
+                case "nd":
+                case "nondirect":
+                    if (this._directResponse) retry = true;
+                    break;
             }
 
             return "";
 
         }).replace(/[$@]\w+/g, "");
+        if (retry) return this._getResponse(databaseKey);
 
         // Обрабатываем разбиения
         message.split(" // ").forEach(part => {
