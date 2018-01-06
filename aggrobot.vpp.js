@@ -678,12 +678,22 @@ AggroBot.ResponseSet = class {
     }
 
     /**
+     * Итерирует множество
+     * @param func
+     */
+    forEach(func) {
+
+        this._array.forEach(func);
+
+    }
+
+    /**
      * Генерирует новое состояние ответов
      */
     reset() {
 
         this._totalAvailable = this._array.length;
-        this._array.forEach(response => response.used = false);
+        this.forEach(response => response.used = false);
 
     }
 
