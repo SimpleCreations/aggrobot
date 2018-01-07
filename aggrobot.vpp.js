@@ -263,28 +263,21 @@ const AggroBot = class {
 
         if (!this._greeted) {
             this._greeted = true;
-            this._getResponse("greetings").forEach((response, index) => {
-                const queued = new AggroBot.QueuedResponse(response);
-                if (!index) queued.readDelay = AggroBot.TIME_ADDITIONAL_READ_DELAY;
-                queued.discardOnMessage = true;
-                this._enqueueResponse(queued);
+            this._processAndAddToQueue(this._getMessage("greetings"), {
+                discardOnMessage: true
             });
         }
         else {
             // Добавляем в очередь новый первичный ответ, если бот не занят
-            if (!this._responseQueue[0]) {
-                this._getResponse("primary").forEach((response, index) => {
-                    const queued = new AggroBot.QueuedResponse(response);
-                    queued.readDelay = !index ? AggroBot.getTimeToRead(request) : AggroBot.TIME_ADDITIONAL_READ_DELAY;
-                    this._enqueueResponse(queued);
+            if (!this._responseQueue[0] || this._responseQueue.every(queued => !queued.blockQueue)) {
+                this._processAndAddToQueue(this._getMessage("primary"), {
+                    readDelay: AggroBot.getTimeToRead(request)
                 });
                 while (Math.random() < AggroBot.PROBABILITY_SECONDARY) {
-                    this._getResponse("secondary").forEach(response => {
-                        const queued = new AggroBot.QueuedResponse(response);
-                        queued.readDelay = AggroBot.TIME_ADDITIONAL_READ_DELAY;
-                        queued.interruptOnTyping = false;
-                        queued.discardOnMessage = true;
-                        this._enqueueResponse(queued);
+                    this._processAndAddToQueue(this._getMessage("secondary"), {
+                        readDelay: AggroBot.TIME_ADDITIONAL_READ_DELAY,
+                        interruptOnTyping: false,
+                        discardOnMessage: true
                     });
                 }
             }
@@ -437,19 +430,18 @@ const AggroBot = class {
     }
 
     /**
-     * Возвращает случайный ответ из базы сообщений по ключу
+     * Возвращает случайное сообщение из базы сообщений по ключу
      * @param {string} databaseKey
-     * @returns {Array<string>}
+     * @returns {string}
      * @private
      */
-    _getResponse(databaseKey) {
-
-        const string = this._database[databaseKey].getRandom().string;
+    _getMessage(databaseKey) {
 
         // Парсим функции и флаги внутри сообщения
         // Временно: удаляем $
         let retry = false;
-        const message = string.replace(/%(\w+)(?:\(([^,)]*(?:,[^,)]*)*)\))?/g, (_, name, args) => {
+        let message = this._database.getRandom(databaseKey).string;
+        message = message.replace(/%(\w+)(?:\(([^,)]*(?:,[^,)]*)*)\))?/g, (_, name, args) => {
 
             args = args ? args.split(",") : [];
 
@@ -470,37 +462,82 @@ const AggroBot = class {
             return "";
 
         }).replace(/[$@]\w+/g, "");
-        if (retry) return this._getResponse(databaseKey);
+
+        if (retry) return this._getMessage(databaseKey);
+        return message;
+
+    }
+
+    /**
+     * Обрабатывает сообщение из базы сообщений и добавляет все полученные ответы в очередь
+     * @param {string} message
+     * @param {object} queuedResponseOptions Дополнительные параметры и флаги для ответа в очереди
+     * @private
+     */
+    _processAndAddToQueue(message, queuedResponseOptions = {}) {
+
+        this._prepareQueuedResponses(message, queuedResponseOptions).forEach(queued => this._enqueueResponse(queued));
+
+    }
+
+    /**
+     * Обрабатывает сообщение из базы сообщений и возвращает все ответы, которые необходимо добавить в очередь
+     * @param {string} message
+     * @param {object} queuedResponseOptions Дополнительные параметры и флаги для ответа в очереди
+     * @returns {Array<AggroBot.QueuedResponse>}
+     * @private
+     */
+    _prepareQueuedResponses(message, queuedResponseOptions = {}) {
 
         // Обрабатываем разбиения
         const splitResult = [];
         message.split(" // ").forEach(part => {
+            const push = response => {
+                const queued = new AggroBot.QueuedResponse(response);
+                Object.keys(queuedResponseOptions).forEach(key => queued[key] = queuedResponseOptions[key]);
+                splitResult.push(queued);
+            };
             let buffer;
             part.split(" / ").forEach(part => {
                 if (!buffer) buffer = part;
                 else if (Math.random() < AggroBot.getSplitProbabilityByCurrentPart(buffer)) {
-                    splitResult.push(buffer);
+                    push(buffer);
                     buffer = part;
                 }
                 else buffer += " " + part;
             });
-            splitResult.push(buffer);
+            // noinspection JSUnusedAssignment
+            push(buffer);
         });
 
         // Вставляем опечатки
         let typosResult = [];
-        splitResult.forEach(message => {
-            const {result, corrections} = this._style.insertTypos(message);
-            typosResult.push(result);
-            corrections.forEach(correction => typosResult.push(correction + "*"));
+        splitResult.forEach(queued => {
+            const {result, corrections} = this._style.insertTypos(queued.message);
+            queued.message = result;
+            typosResult.push(queued);
+            corrections.forEach(correction => {
+                const queued = new AggroBot.QueuedResponse(correction + "*");
+                queued.readDelay = AggroBot.TIME_ADDITIONAL_READ_DELAY;
+                queued.interruptOnTyping = false;
+                queued.interruptOnMessage = false;
+                queued.blockQueue = false;
+                typosResult.push(queued);
+            });
             if (corrections.length && Math.random() < AggroBot.getTypoExclamationProbabilityByAmountOfCorrections(corrections.length)) {
                 console.log("Adding exclamation");
-                this._getResponse("exclamation").forEach(message => typosResult.push(message));
+                this._prepareQueuedResponses(this._getMessage("exclamation"), {
+                    readDelay: AggroBot.TIME_ADDITIONAL_READ_DELAY,
+                    interruptOnTyping: false,
+                    interruptOnMessage: false,
+                    blockQueue: false
+                }).forEach(queued => typosResult.push(queued));
             }
         });
 
         // Добавляем заглавные буквы
-        if (this._style.capitalize) typosResult = typosResult.map(message => message[0].toUpperCase() + message.substring(1));
+        if (this._style.capitalize) typosResult.forEach(queued =>
+            queued.message = queued.message[0].toUpperCase() + queued.message.substring(1));
 
         return typosResult;
 
@@ -514,10 +551,10 @@ const AggroBot = class {
     _determineGender(message) {
 
         let gender;
-        if (/(^|[^а-яё])(я?([жд]|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)|я\s+[а-яё]+ая?)($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я\s+не\s+([мmп]|парень?|пацан|мальчик|муж(ик|чина)?)($|[^а-яё])|^[^а-яё]*((я|меня)\s+)?(Александра|Алина|Алиса|Алла|Анастасия|Настя|Анна|Аня|Валерия|Вера|Виктория|Вика|Галя|Дарья|Даша|Диана|Ева|Евгения|Екатерина|Катя|Елена|Лена|Елизавета|Лиза|Ира|Ирина|Карина|Кира|Кристина|Ксения|Ксюша|Лариса|Лида|Лилия|Люба|Людмила|Люда|Маргарита|Рита|Марина|Мария|Маша|Милена|Надежда|Надя|Наталья|Наташа|Ника|Нина|Оксана|Олеся|Ольга|Оля|Полина|Светлана|Света|Софья|Соня|Татьяна|Таня|Ульяна|Юлия|Юля|Яна)[^а-яё?]*$/i.test(message)) {
+        if (/(^|[^а-яё])(я?([жд]|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)|я\s+[а-яё]{3,}ая?)($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я\s+не\s+([мmп]|парень?|пацан|мальчик|муж(ик|чина)?)($|[^а-яё])|^[^а-яё]*((я|меня)\s+)?(Александра|Алина|Алиса|Алла|Анастасия|Настя|Анна|Аня|Валерия|Вера|Виктория|Вика|Галя|Дарья|Даша|Диана|Ева|Евгения|Екатерина|Катя|Елена|Лена|Елизавета|Лиза|Ира|Ирина|Карина|Кира|Кристина|Ксения|Ксюша|Лариса|Лида|Лилия|Люба|Людмила|Люда|Маргарита|Рита|Марина|Мария|Маша|Милена|Надежда|Надя|Наталья|Наташа|Ника|Нина|Оксана|Олеся|Ольга|Оля|Полина|Светлана|Света|Софья|Соня|Татьяна|Таня|Ульяна|Юлия|Юля|Яна)[^а-яё?]*$/i.test(message)) {
             gender = AggroBot.UserProfile.Gender.FEMALE;
         }
-        else if (/(^|[^а-яё])(я?([мmп]|парень?|пацан|мальчик|муж(ик|чина)?)|я\s+[а-яё]+(ый|л))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я\s+не\s+([жд]|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)($|[^а-яё])|^[^а-яё]*((я|меня)\s+)?(Александр|Алексей|Леша|Леха|Андрей|Антон|Артем|Артур|Ваня|Василий|Вася|Виктор|Витя|Виталий|Владимир|Вова|Влад|Глеб|Григорий|Гриша|Даниил|Данила|Денис|Дмитрий|Дима|Евгений|Егор|Иван|Игорь|Илья|Кирилл|Костя|Макс|Матвей|Михаил|Миша|Никита|Николай|Коля|Олег|Павел|Паша|Рома|Семен|Сема|Сергей|Стас|Тимур|Юрий|Юра)[^а-яё?]*$/i.test(message)) {
+        else if (/(^|[^а-яё])(я?([мmп]|парень?|пацан|мальчик|муж(ик|чина)?)|я\s+[а-яё]{2,}(ый|л))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я\s+не\s+([жд]|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)($|[^а-яё])|^[^а-яё]*((я|меня)\s+)?(Александр|Алексей|Леша|Леха|Андрей|Антон|Артем|Артур|Ваня|Василий|Вася|Виктор|Витя|Виталий|Владимир|Вова|Влад|Глеб|Григорий|Гриша|Даниил|Данила|Денис|Дмитрий|Дима|Евгений|Егор|Иван|Игорь|Илья|Кирилл|Костя|Макс|Матвей|Михаил|Миша|Никита|Николай|Коля|Олег|Павел|Паша|Рома|Семен|Сема|Сергей|Стас|Тимур|Юрий|Юра)[^а-яё?]*$/i.test(message)) {
             gender = AggroBot.UserProfile.Gender.MALE;
         }
 
@@ -638,6 +675,12 @@ AggroBot.QueuedResponse = class {
          */
         this.discardOnMessage = false;
 
+        /**
+         * Флаг: будет ли данный ответ мешать добавлению в очередь нового первичного ответа
+         * @type {boolean}
+         */
+        this.blockQueue = true;
+
     }
 
 };
@@ -653,7 +696,19 @@ AggroBot.Database = class {
      */
     reset() {
 
+        // noinspection JSCheckFunctionSignatures
         Object.keys(this).forEach(key => this[key].reset());
+
+    }
+
+    /**
+     * Возвращает случайный ответ по ключу
+     * @param key
+     * @returns {AggroBot.Response}
+     */
+    getRandom(key) {
+
+        return this[key].getRandom();
 
     }
 
@@ -687,6 +742,7 @@ Object.assign(AggroBot.Database, {
     fromAnother(anotherDatabase) {
 
         const database = new AggroBot.Database();
+        // noinspection JSCheckFunctionSignatures
         Object.keys(anotherDatabase).forEach(key => {
             const set = new AggroBot.ResponseSet();
             anotherDatabase[key].forEach(response => set.add(new AggroBot.Response(response.string)));
@@ -843,8 +899,9 @@ AggroBot.Style = class {
          * соответственно перестановки букв, ввод не той буквы и добавление/удаление буквы.
          * @type {number}
          */
-        this.typoProbability = Math.pow(2, 17 * Math.random() - 20) + 0.000075;
-        console.log(`Typo probability: ${this.typoProbability.toFixed(5)}`);
+        this.typoProbability = Math.pow(2, 17 * Math.random() - 20.1) + 0.001;
+        //this.typoProbability = Math.max(0.00025, 13 * Math.pow(Math.random() - 0.485, 7) + 0.001);
+        console.log(`Typo probability: ${this.typoProbability.toFixed(6)}`);
         this.swapTypoProbability = Math.random() * 2 / 3;
         this.mishitTypoProbability = Math.random() * (1 - this.swapTypoProbability);
         this.alterTypoProbability = 1 - this.swapTypoProbability - this.mishitTypoProbability;
@@ -883,6 +940,7 @@ AggroBot.Style = class {
             let typos = 0;
             for (let i = 0; i < part.length; i++) {
                 if (Math.random() < this.typoProbability) {
+                    console.log(`making a typo in "${part}" @ ${i}`);
                     typos++;
                     let random = Math.random();
                     if (random < this.swapTypoProbability && i != part.length - 1) result += part[i + 1] + part[i++];
@@ -921,6 +979,7 @@ AggroBot.Style = class {
 
 };
 
+// noinspection NonAsciiCharacters
 Object.assign(AggroBot.Style, {
 
     /**
@@ -944,7 +1003,7 @@ Object.assign(AggroBot.Style, {
     _getTypeCorrectionProbability(amountOfTypos) {
         switch (amountOfTypos) {
             case 0: return 0;
-            case 1: return 0.45;
+            case 1: return 0.3;
             case 2: return 0.775;
             case 3: return 0.925;
             default: return 1;
