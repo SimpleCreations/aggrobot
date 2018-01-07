@@ -9,6 +9,16 @@
 
 const log = message => VPP.chats[0].log(`[AggroBot] ${message}`);
 
+const compareVersions = (version1, version2) => {
+    version1 = version1.split(".");
+    version2 = version2.split(".");
+    for (let i = 0; i < version2.length; i++) {
+        if (!version1[i] || +version2[i] > +version1[i]) return 1;
+        else if (+version2[i] < +version1[i]) return -1;
+    }
+    return version2.length != version1.length ? -1 : 0;
+};
+
 log("Проверка обновлений...");
 $.ajax({
     url: VPPScript.meta["update-url"],
@@ -18,7 +28,7 @@ $.ajax({
     .pipe(response => response["script_version"] ? response : $.Deferred().reject())
     .done(response => {
 
-        log(response["script_version"] > VPPScript.meta["version"] ?
+        log(compareVersions(response["script_version"], VPPScript.meta["version"]) < 0 ?
 
             `Вы используете устаревший скрипт.<br>
 Текущая версия: ${VPPScript.meta["version"]}<br>
@@ -31,7 +41,7 @@ $.ajax({
 
         if (!response["database_version"]) return log("Не удалось получить последнюю версию базы сообщений.");
         const currentDatabaseVersion = VPPScript.storage.databaseVersion;
-        if (!currentDatabaseVersion || response["database_version"] > currentDatabaseVersion) {
+        if (!currentDatabaseVersion || compareVersions(response["database_version"], currentDatabaseVersion) < 0) {
 
             log(!currentDatabaseVersion ? "Идёт скачивание базы сообщений..." : "Идёт обновление базы сообщений...");
             $.ajax({
@@ -67,6 +77,7 @@ const enableScript = () => {
     VPP.chats.forEach(chat => {
 
         const aggroBot = new AggroBot();
+        chat.aggroBot = aggroBot;
         const database = !firstDatabase ? (firstDatabase = AggroBot.Database.fromRaw(VPPScript.storage.database)) :
             AggroBot.Database.fromAnother(firstDatabase);
         aggroBot.setDatabase(database);
@@ -175,6 +186,13 @@ const AggroBot = class {
          */
         this._userProfile = new AggroBot.UserProfile();
 
+        /**
+         * Стиль письма бота
+         * @type {AggroBot.Style}
+         * @private
+         */
+        this._style = new AggroBot.Style();
+
     }
 
     /**
@@ -245,8 +263,9 @@ const AggroBot = class {
 
         if (!this._greeted) {
             this._greeted = true;
-            this._getResponse("greetings").forEach(response => {
+            this._getResponse("greetings").forEach((response, index) => {
                 const queued = new AggroBot.QueuedResponse(response);
+                if (!index) queued.readDelay = AggroBot.TIME_ADDITIONAL_READ_DELAY;
                 queued.discardOnMessage = true;
                 this._enqueueResponse(queued);
             });
@@ -256,12 +275,13 @@ const AggroBot = class {
             if (!this._responseQueue[0]) {
                 this._getResponse("primary").forEach((response, index) => {
                     const queued = new AggroBot.QueuedResponse(response);
-                    if (!index) queued.readDelay = AggroBot.getTimeToRead(request);
+                    queued.readDelay = !index ? AggroBot.getTimeToRead(request) : AggroBot.TIME_ADDITIONAL_READ_DELAY;
                     this._enqueueResponse(queued);
                 });
-                while (Math.random() < AggroBot.CHANCE_SECONDARY) {
+                while (Math.random() < AggroBot.PROBABILITY_SECONDARY) {
                     this._getResponse("secondary").forEach(response => {
                         const queued = new AggroBot.QueuedResponse(response);
+                        queued.readDelay = AggroBot.TIME_ADDITIONAL_READ_DELAY;
                         queued.interruptOnTyping = false;
                         queued.discardOnMessage = true;
                         this._enqueueResponse(queued);
@@ -425,7 +445,6 @@ const AggroBot = class {
     _getResponse(databaseKey) {
 
         const string = this._database[databaseKey].getRandom().string;
-        const result = [];
 
         // Парсим функции и флаги внутри сообщения
         // Временно: удаляем $
@@ -454,20 +473,33 @@ const AggroBot = class {
         if (retry) return this._getResponse(databaseKey);
 
         // Обрабатываем разбиения
+        const splitResult = [];
         message.split(" // ").forEach(part => {
             let buffer;
             part.split(" / ").forEach(part => {
                 if (!buffer) buffer = part;
-                else if (Math.random() < AggroBot.getSplitChanceByCurrentPart(buffer)) {
-                    result.push(buffer);
+                else if (Math.random() < AggroBot.getSplitProbabilityByCurrentPart(buffer)) {
+                    splitResult.push(buffer);
                     buffer = part;
                 }
-                else buffer += part;
+                else buffer += " " + part;
             });
-            result.push(buffer);
+            splitResult.push(buffer);
         });
 
-        return result;
+        // Вставляем опечатки
+        const typosResult = [];
+        splitResult.forEach(message => {
+            const {result, corrections} = this._style.insertTypos(message);
+            typosResult.push(result);
+            corrections.forEach(correction => typosResult.push(correction + "*"));
+            if (corrections.length && Math.random() < AggroBot.getTypoExclamationProbabilityByAmountOfCorrections(corrections.length)) {
+                console.log("Adding exclamation");
+                this._getResponse("exclamation").forEach(message => typosResult.push(message));
+            }
+        });
+
+        return typosResult;
 
     }
 
@@ -526,17 +558,31 @@ Object.assign(AggroBot, {
     TIME_INCREMENT_INACTIVE_COUNTER: 15000,
 
     /**
+     * Время задержки перед началом печати дополнительного сообщения (части разбиения, вторичной фразы и т.д.)
+     */
+    TIME_ADDITIONAL_READ_DELAY: 600,
+
+    /**
      * Вероятность написания первичного ответа
      */
-    CHANCE_SECONDARY: 0.275,
+    PROBABILITY_SECONDARY: 0.275,
+
+    /**
+     * Определяет вероятность вставки междометия после поправки опечатки в зависимости от количества поправок
+     * @param {number} amountOfCorrections
+     * @returns {number}
+     */
+    getTypoExclamationProbabilityByAmountOfCorrections(amountOfCorrections) {
+        return Math.pow(0.3, 1 / amountOfCorrections);
+    },
 
     /**
      * Возвращает вероятность разбиения сообщения при переданной текущей неразбитой части
      * @param message
      * @returns {number}
      */
-    getSplitChanceByCurrentPart(message) {
-        return 2 / (1 + Math.exp(-0.044 * message.length)) + 1
+    getSplitProbabilityByCurrentPart(message) {
+        return 2 / (1 + Math.exp(-0.044 * message.length)) + 1;
     }
 
 });
@@ -757,7 +803,7 @@ AggroBot.UserProfile = class {
     constructor() {
 
         /**
-         * Пол
+         * Гендер
          * @type {AggroBot.UserProfile.Gender}
          */
         this.gender = AggroBot.UserProfile.Gender.MALE;
@@ -774,6 +820,128 @@ AggroBot.UserProfile = class {
 AggroBot.UserProfile.Gender = Object.freeze({
     MALE: 0,
     FEMALE: 1
+});
+
+/**
+ * Стиль письма
+ * @class
+ */
+AggroBot.Style = class {
+
+    /**
+     * Генерирует новый стиль
+     * @constructor
+     */
+    constructor() {
+
+        /**
+         * Вероятность совершения опечатки в букве,
+         * а также вероятности совершения разных видов опечаток,
+         * соответственно перестановки букв, ввод не той буквы и добавление/удаление буквы.
+         * @type {number}
+         */
+        this.typoProbability = Math.pow(2, 17 * Math.random() - 20.5);
+        console.log(`Typo probability: ${this.typoProbability.toFixed(5)}`);
+        this.swapTypoProbability = Math.random() * 2 / 3;
+        this.mishitTypoProbability = Math.random() * (1 - this.swapTypoProbability);
+        this.alterTypoProbability = 1 - this.swapTypoProbability - this.mishitTypoProbability;
+
+        this.typoCorrectionProbabilityMultiplier = Math.pow(Math.random(), 1 / 4);
+
+    }
+
+    /**
+     * Вставляет во фразу опечатки на основе стиля и также возвращает откорректированные слова
+     * @param {string} string
+     * @returns {{result: string, corrections: Array<string>}}
+     */
+    insertTypos(string) {
+
+        const match = string.match(/^[^а-яё]+/i);
+        let result = match ? match[0] : "";
+        const corrections = [];
+
+        const regExp = /([а-яё]+)([^а-яё]+|$)/ig;
+        let lastCorrected = false;
+        let matches;
+        while (matches = regExp.exec(string)) {
+            const part = matches[0];
+            if (part.length <= 3) {
+                result += part;
+                lastCorrected = false;
+                continue;
+            }
+            let typos = 0;
+            for (let i = 0; i < part.length; i++) {
+                if (Math.random() < this.typoProbability) {
+                    typos++;
+                    let random = Math.random();
+                    if (random < this.swapTypoProbability && i != part.length - 1) result += part[i + 1] + part[i++];
+                    else if ((random -= this.swapTypoProbability) < this.mishitTypoProbability) {
+                        const options = AggroBot.Style._KEYBOARD_TYPOS[part[i]];
+                        result += options ? options[Math.floor(Math.random() * options.length)] : part[i];
+                    }
+                    else if ((random -= this.mishitTypoProbability) < this.alterTypoProbability) {
+                        if (Math.random() < 0.5) {
+                            const options = AggroBot.Style._KEYBOARD_TYPOS[part[i]];
+                            result += part[i] + (options ? options[Math.floor(Math.random() * options.length)] : "");
+                            i++;
+                        }
+                    }
+                    else typos--;
+                }
+                else result += part[i];
+            }
+            if (typos) {
+                if (lastCorrected) corrections[corrections.length - 1] += " " + matches[1];
+                else if (Math.random() < AggroBot.Style._getTypeCorrectionProbability(typos) *
+                    Math.pow(this.typoCorrectionProbabilityMultiplier, corrections.length + 1)) {
+                    console.log("Adding correction, prob: " + AggroBot.Style._getTypeCorrectionProbability(typos) *
+                        Math.pow(this.typoCorrectionProbabilityMultiplier, corrections.length + 1));
+                    corrections.push(matches[1]);
+                    lastCorrected = true;
+                }
+                else lastCorrected = false;
+            }
+            else lastCorrected = false;
+        }
+
+        return {result, corrections};
+
+    }
+
+};
+
+Object.assign(AggroBot.Style, {
+
+    /**
+     * Возможные подмены букв с целью симуляции опечатки
+     * @private
+     */
+    _KEYBOARD_TYPOS: {
+        "й": "цф1", "ц": "фыу", "у": "цывк", "к": "увае", "е": "капн", "н": "епрг", "г": "нрош", "ш": "голщ",
+        "з": "щджх", "х": "зжэъ", "ъ": "хэ", "ф": "йцыя", "ы": "цфячв", "в": "уычса", "а": "квсмпе",
+        "п": "еамир", "р": "нпито", "о": "гртьл", "л": "шоьбд", "д": "щлбюж", "ж": "здюэ", "э": "хжъ",
+        "я": "фыч", "ч": "яывс", "с": "чвам ", "м": "пас и", "и": "пм тр", "т": "ори ь", "ь": "от бл", "б": "ьлдю",
+        "ю": "бдж"
+    },
+
+    /**
+     * Возвращает вероятность коррекции опечаток в слове на основе количества опечаток
+     * @param {number} amountOfTypos
+     * @returns {number}
+     * @private
+     */
+    _getTypeCorrectionProbability(amountOfTypos) {
+        switch (amountOfTypos) {
+            case 0: return 0;
+            case 1: return 0.45;
+            case 2: return 0.775;
+            case 3: return 0.925;
+            default: return 1;
+        }
+    }
+
 });
 
 VPP.Chat.prototype.aggrobot = (command, ...args) => {
@@ -797,7 +965,13 @@ VPP.Chat.prototype.aggrobot = (command, ...args) => {
 
 VPPScript.stop = () => {
 
-    VPP.chats.forEach(chat => chat.removeEventListener("aggrobot"));
+    VPP.chats.forEach(chat => {
+        if (chat.aggroBot) {
+            chat.aggroBot.suspend();
+            delete chat.aggroBot;
+        }
+        chat.removeEventListener("aggrobot");
+    });
     delete VPP.Chat.prototype.aggrobot;
 
 };
