@@ -521,6 +521,7 @@ const AggroBot = class {
                 queued.readDelay = AggroBot.TIME_ADDITIONAL_READ_DELAY;
                 queued.interruptOnTyping = false;
                 queued.interruptOnMessage = false;
+                queued.discardOnMessage = !!queuedResponseOptions.discardOnMessage;
                 queued.blockQueue = false;
                 typosResult.push(queued);
             });
@@ -528,6 +529,7 @@ const AggroBot = class {
                 console.log("Adding exclamation");
                 this._prepareQueuedResponses(this._getMessage("exclamation"), {
                     readDelay: AggroBot.TIME_ADDITIONAL_READ_DELAY,
+                    discardOnMessage: !!queuedResponseOptions.discardOnMessage,
                     interruptOnTyping: false,
                     interruptOnMessage: false,
                     blockQueue: false
@@ -937,28 +939,31 @@ AggroBot.Style = class {
                 lastCorrected = false;
                 continue;
             }
+            let newPart = "";
             let typos = 0;
             for (let i = 0; i < part.length; i++) {
                 if (Math.random() < this.typoProbability) {
                     console.log(`making a typo in "${part}" @ ${i}`);
                     typos++;
                     let random = Math.random();
-                    if (random < this.swapTypoProbability && i != part.length - 1) result += part[i + 1] + part[i++];
+                    if (random < this.swapTypoProbability && i != part.length - 1) newPart += part[i + 1] + part[i++];
                     else if ((random -= this.swapTypoProbability) < this.mishitTypoProbability) {
                         const options = AggroBot.Style._KEYBOARD_TYPOS[part[i]];
-                        result += options ? options[Math.floor(Math.random() * options.length)] : part[i];
+                        newPart += options ? options[Math.floor(Math.random() * options.length)] : part[i];
                     }
                     else if ((random -= this.mishitTypoProbability) < this.alterTypoProbability) {
                         if (Math.random() < 0.5) {
                             const options = AggroBot.Style._KEYBOARD_TYPOS[part[i]];
-                            result += part[i] + (options ? options[Math.floor(Math.random() * options.length)] : "");
+                            newPart += part[i] + (options ? options[Math.floor(Math.random() * options.length)] : "");
                             i++;
                         }
                     }
                     else typos--;
                 }
-                else result += part[i];
+                else newPart += part[i];
             }
+            result += newPart;
+            if (newPart == part) typos = 0;
             if (typos) {
                 if (lastCorrected) corrections[corrections.length - 1] += " " + matches[1];
                 else if (Math.random() < AggroBot.Style._getTypeCorrectionProbability(typos) *
