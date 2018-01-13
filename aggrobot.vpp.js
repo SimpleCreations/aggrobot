@@ -211,9 +211,13 @@ const AggroBot = class {
     suspend() {
 
         clearTimeout(this._readTimeout);
+        this._readTimeout = null;
         clearTimeout(this._typeTimeout);
+        this._typeTimeout = null;
         clearTimeout(this._interruptedTimeout);
+        this._interruptedTimeout = null;
         clearTimeout(this._activityCheckTimeout);
+        this._activityCheckTimeout = null;
 
     }
 
@@ -414,8 +418,11 @@ const AggroBot = class {
     _clearQueue() {
 
         clearTimeout(this._readTimeout);
+        this._readTimeout = null;
         clearTimeout(this._typeTimeout);
+        this._typeTimeout = null;
         clearTimeout(this._interruptedTimeout);
+        this._interruptedTimeout = null;
 
         this._responseQueue.length = 0;
         this._setQueueUpdated();
