@@ -2,9 +2,9 @@
 // @name            AggroBot
 // @version         0.1.2
 // @script-filename aggrobot.vpp.js
-// @update-url      https://raw.githubusercontent.com/SimpleCreations/aggrobot/master/update.json
+// @update-url      https://raw.githubusercontent.com/SimpleCreations/aggrobot/Release-2/update.json
 // @script-url      https://raw.githubusercontent.com/SimpleCreations/aggrobot/master/aggrobot.vpp.js
-// @database-url    https://raw.githubusercontent.com/SimpleCreations/aggrobot/master/database.json
+// @database-url    https://raw.githubusercontent.com/SimpleCreations/aggrobot/Release-2/database.json
 // ==/VPPScript==
 
 const log = message => VPP.chats[0].log(`[AggroBot] ${message}`);
