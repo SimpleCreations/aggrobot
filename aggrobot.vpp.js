@@ -552,7 +552,7 @@ const AggroBot = class {
         splitResult.forEach(queued => queued.message = this._style.misspell(queued.message));
 
         // Умножаем количество вопросительных и высклицательных знаков
-        for (let i = splitResult.length; i >= 0; i++) {
+        for (let i = splitResult.length - 1; i >= 0; i--) {
             const queued = splitResult[i];
             if (!/[!?]$/.test(queued.message)) continue;
             while (Math.random() < this._style.questionMarkDuplicationProbability) {
@@ -984,7 +984,7 @@ AggroBot.Style = class {
 
             // Ошибка типа 0: замена а <-> о, и <-> е
             // От 0 до 0.4
-            0: Math.pow(Math.random(), 3) / 2.5,
+            0: Math.pow(2, 9 * Math.random() - 11.4),
 
             // Ошибка типа 1: -тся/-ться
             1: AggroBot.Style._getTwoOptionProbability(0.15, 0.5),
@@ -999,7 +999,7 @@ AggroBot.Style = class {
             4: AggroBot.Style._getTwoOptionProbability(0.07143, 0.7),
 
             // Ошибка типа 5: -чк-, -чн-
-            5: AggroBot.Style._getTwoOptionProbability(0.1, 0.5),
+            5: AggroBot.Style._getTwoOptionProbability(0.2, 0.55),
 
             // Ошибка типа 6: не- слитно/раздельно
             6: AggroBot.Style._getTwoOptionProbability(0.1, 0.5),
@@ -1022,10 +1022,13 @@ AggroBot.Style = class {
             // Двойные согласные
             12: AggroBot.Style._getTwoOptionProbability(0.175, 0.5),
 
+            // тся/ться -> ца
+            13: AggroBot.Style._getTwoOptionProbability(0.025, 0.85),
+
         };
 
-        this.questionMarkDuplicationProbability = Math.max(Math.pow((Math.random() - 0.4) / 0.6, 1 / 2), 0);
-        this.questionMarkLineBreakProbability = (random => random < 0.6 ? 0 : random)(Math.random);
+        this.questionMarkDuplicationProbability = Math.pow(Math.max((Math.random() - 0.4) / 0.6, 0), 1 / 2);
+        this.questionMarkLineBreakProbability = (random => random < 0.6 ? 0 : random)(Math.random());
 
     }
 
@@ -1123,27 +1126,28 @@ AggroBot.Style = class {
                         case "и": return "е";
                     }
                 });
-            }console.log(string);
-            string = result;console.log(string);
+            }
+            string = result;
         }
 
         // Тип 1–11
-        {console.log(string);
+        {
             [
                 /т(ь?)ся(?![а-яё])/g,
                 /([еёи])шь(?![а-яё])/g,
-                /([аоуыэюя][жчшщ])(ь?)/g,
+                /([аоуыэюя][жчшщ])(ь?)(?![а-яё])/g,
                 /[жш]и|[чщ][ау]/g,
                 /ч([кн])/g,
-                /н([еи])( ?)(?=[а-яё]{3,})/g,
+                /([^а-яё]|^)н([еи])( ?)(?=[а-яё]{3,})/g,
                 /([а-яё]+[аеёиоуыюя])(н+)(?=(?:[ыиао]й|[аоя]я|[аоеи](?:е|го|му)|ик|ица)(?:[^а-яё]|$))/g,
-                /([а-яё]{3,}[ао])го(?![а-яё])/g,
-                /([жчшщ])([еёо])/g,
+                /([а-яё]{3,}[аоеи])го(?![а-яё])/g,
+                /([жчшщ])([еёо])(?=[а-чщ-яё])/g,
                 /([^а-яё]|^)([мт])(ен|еб)я(?![а-яё])/g,
                 /в([ао]{1,2})бще/g,
-                /[бвгджзклмпрстфхцчшщ]{2}/g
+                /([бвгджзклмпрстфхцчшщ])\1/g,
+                /ть?ся(?![а-яё])/g
             ].forEach((regExp, index) => {
-                const type = index + 1;console.log(string);
+                const type = index + 1;
                 string = string.replace(regExp, (...matches) => {
                     if (Math.random() > this.misspellProbability[type]) return matches[0];
                     console.log(`misspelling "${string}" with type ${type} @ ${matches[matches.length - 2]}`);
@@ -1160,7 +1164,7 @@ AggroBot.Style = class {
                         case 5:
                             return "чь" + matches[1];
                         case 6:
-                            return "н" + matches[1] + (matches[2] ? "" : " ");
+                            return matches[1] + "н" + matches[2] + (matches[3] ? "" : " ");
                         case 7:
                             return matches[1] + (matches[2].length == 1 ? "нн" : "н");
                         case 8:
@@ -1172,7 +1176,9 @@ AggroBot.Style = class {
                         case 11:
                             return "ваще";
                         case 12:
-                            return matches[0].charAt(0);
+                            return matches[1];
+                        case 13:
+                            return "ца";
                     }
                 });
             });
