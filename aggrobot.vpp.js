@@ -1,6 +1,6 @@
 // ==VPPScript==
 // @name            AggroBot
-// @version         0.1.2
+// @version         1.0.0
 // @script-filename aggrobot.vpp.js
 // @update-url      https://raw.githubusercontent.com/SimpleCreations/aggrobot/Release-2/update.json
 // @script-url      https://raw.githubusercontent.com/SimpleCreations/aggrobot/master/aggrobot.vpp.js
