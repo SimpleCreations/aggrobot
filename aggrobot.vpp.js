@@ -955,6 +955,47 @@ AggroBot.Style = class {
          */
         this.capitalize = Math.random() < AggroBot.Style._PROBABILITY_CAPITALIZE;
 
+        this.misspellProbability = {
+
+            // Ошибка типа 0: замена а <-> о, и <-> е
+            // От 0 до 0.4
+            0: Math.pow(Math.random(), 3) / 2.5,
+
+            // Ошибка типа 1: -тся/-ться
+            1: AggroBot.Style._getTwoOptionProbability(0.15, 0.5),
+
+            // Ошибка типа 2: -ишь, -ешь
+            2: AggroBot.Style._getTwoOptionProbability(0.75, 0.375),
+
+            // Ошибка типа 3: мягкий знак после шипящих
+            3: AggroBot.Style._getTwoOptionProbability(0.07, 0.6),
+
+            // Ошибка типа 4: жи, ши, ча, ща, чу, щу
+            4: AggroBot.Style._getTwoOptionProbability(0.07143, 0.7),
+
+            // Ошибка типа 5: -чк-, -чн-
+            5: AggroBot.Style._getTwoOptionProbability(0.1, 0.5),
+
+            // Ошибка типа 6: не- слитно/раздельно
+            6: AggroBot.Style._getTwoOptionProbability(0.1, 0.5),
+
+            // Ошибка типа 7: нн <-> н
+            7: AggroBot.Style._getTwoOptionProbability(0.1, 0.5),
+
+            // Ошибка типа 8: ого -> ова
+            8: AggroBot.Style._getTwoOptionProbability(0.06, 0.8),
+
+            // Ошибка типа 9: шо <-> ше, чо <-> чё, що <-> ще
+            9: AggroBot.Style._getTwoOptionProbability(0.1, 0.5),
+
+            // Стиль типа 10: меня -> мя, тебя -> тя
+            10: AggroBot.Style._getTwoOptionProbability(0.05, 0.5),
+
+            // Стиль типа 11: вообще -> ваще
+            11: AggroBot.Style._getTwoOptionProbability(0.05, 0.5),
+
+        };
+
     }
 
     /**
@@ -1021,6 +1062,51 @@ AggroBot.Style = class {
 
     }
 
+    /**
+     * Вставляет во фразу ошибки на основе стиля
+     * @param {string} string
+     * @returns {string}
+     */
+    misspell(string) {
+
+        // Тип 0
+        {
+            const wordRegExp = /([а-яё]+)([^а-яё]+|$)/ig;
+            const letterRegExp = /[аоеи](?=[а-яё])/g;
+            let result = "";
+            let matches;
+            while (matches = wordRegExp.exec(string)) {
+                const part = matches[0];
+                const letters = part.match(letterRegExp);
+                if (!letters || letters.length < 2) continue; // Пропускаем короткие слова
+                result += part.replace(letterRegExp, function(letter, offset) {
+                    if (Math.random() > this.misspellProbability[0]) return letter;
+                    console.log(`misspelling "${part}" with type 0 @ ${offset}`);
+                    switch (letter) {
+                        case "а": return "о";
+                        case "о": return "а";
+                        case "е": return "и";
+                        case "и": return "е";
+                    }
+                });
+            }
+        } // ([а-яё]+[аеёиоуыюя])(н+)(?=(?:[ыиао]й|[аоя]я|[аоеи](?:е|го|му))(?:[^а-яё]|$))
+
+        // Тип 1–10
+        /*{
+            [
+                /т(ь?)шь(?![а-яё])/g,
+                /([ие])шь(?![а-яё])/g,
+                /([жш]/g,
+            ].forEach((regExp, index) => {
+                const type = index + 1;
+            });
+        }*/
+
+        return string;
+
+    }
+
 };
 
 // noinspection NonAsciiCharacters
@@ -1058,7 +1144,20 @@ Object.assign(AggroBot.Style, {
      * Вероятность установки заглавной буквы во всех вразах
      * @private
      */
-    _PROBABILITY_CAPITALIZE: 2 / 3
+    _PROBABILITY_CAPITALIZE: 2 / 3,
+
+    /**
+     * Получает очень малую или очень большую вероятность, являющуюся результатом
+     * кусочно-линейной функции с наклоном slope и точкой разрыва balance
+     * @param {number} slope
+     * @param {number} balance
+     * @returns {number}
+     * @private
+     */
+    _getTwoOptionProbability(slope, balance) {
+        const random = Math.random();
+        return slope * random + (random <= balance ? 0 : 1 - slope);
+    }
 
 });
 
