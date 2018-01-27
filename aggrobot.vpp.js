@@ -543,8 +543,33 @@ const AggroBot = class {
                 else buffer += " " + part;
             });
             // noinspection JSUnusedAssignment
-            push(buffer);
+            push(buffer.trim());
         });
+
+
+
+        // Добавляем ошибки
+        splitResult.forEach(queued => queued.message = this._style.misspell(queued.message));
+
+        // Умножаем количество вопросительных и высклицательных знаков
+        for (let i = splitResult.length; i >= 0; i++) {
+            const queued = splitResult[i];
+            if (!/[!?]$/.test(queued.message)) continue;
+            while (Math.random() < this._style.questionMarkDuplicationProbability) {
+                queued.message += queued.message.slice(-1);
+            }
+            queued.message = queued.message.replace(/[!?]+$/, match => {
+                if (Math.random() > this._style.questionMarkLineBreakProbability) return match;
+                const marksQueued = new AggroBot.QueuedResponse(match);
+                marksQueued.readDelay = AggroBot.TIME_ADDITIONAL_READ_DELAY;
+                marksQueued.interruptOnTyping = false;
+                marksQueued.interruptOnMessage = false;
+                marksQueued.discardOnMessage = !!queuedResponseOptions.discardOnMessage;
+                marksQueued.blockQueue = false;
+                splitResult.splice(i + 1, 0, marksQueued);
+                return "";
+            });
+        }
 
         // Вставляем опечатки
         let typosResult = [];
@@ -994,7 +1019,13 @@ AggroBot.Style = class {
             // Стиль типа 11: вообще -> ваще
             11: AggroBot.Style._getTwoOptionProbability(0.05, 0.5),
 
+            // Двойные согласные
+            12: AggroBot.Style._getTwoOptionProbability(0.175, 0.5),
+
         };
+
+        this.questionMarkDuplicationProbability = Math.max(Math.pow((Math.random() - 0.4) / 0.6, 1 / 2), 0);
+        this.questionMarkLineBreakProbability = (random => random < 0.6 ? 0 : random)(Math.random);
 
     }
 
@@ -1072,15 +1103,18 @@ AggroBot.Style = class {
         // Тип 0
         {
             const wordRegExp = /([а-яё]+)([^а-яё]+|$)/ig;
-            const letterRegExp = /[аоеи](?=[а-яё])/g;
+            const letterRegExp = /[аеёиоуыэюя](?=[а-яё])/g;
             let result = "";
             let matches;
             while (matches = wordRegExp.exec(string)) {
                 const part = matches[0];
                 const letters = part.match(letterRegExp);
-                if (!letters || letters.length < 2) continue; // Пропускаем короткие слова
-                result += part.replace(letterRegExp, function(letter, offset) {
-                    if (Math.random() > this.misspellProbability[0]) return letter;
+                if (!letters || letters.length < 2) { // Пропускаем короткие слова
+                    result += part;
+                    continue;
+                }
+                result += part.replace(letterRegExp, (letter, offset) => {
+                    if ("аоеи".indexOf(letter) == -1 || Math.random() > this.misspellProbability[0]) return letter;
                     console.log(`misspelling "${part}" with type 0 @ ${offset}`);
                     switch (letter) {
                         case "а": return "о";
@@ -1089,19 +1123,60 @@ AggroBot.Style = class {
                         case "и": return "е";
                     }
                 });
-            }
-        } // ([а-яё]+[аеёиоуыюя])(н+)(?=(?:[ыиао]й|[аоя]я|[аоеи](?:е|го|му))(?:[^а-яё]|$))
+            }console.log(string);
+            string = result;console.log(string);
+        }
 
-        // Тип 1–10
-        /*{
+        // Тип 1–11
+        {console.log(string);
             [
-                /т(ь?)шь(?![а-яё])/g,
-                /([ие])шь(?![а-яё])/g,
-                /([жш]/g,
+                /т(ь?)ся(?![а-яё])/g,
+                /([еёи])шь(?![а-яё])/g,
+                /([аоуыэюя][жчшщ])(ь?)/g,
+                /[жш]и|[чщ][ау]/g,
+                /ч([кн])/g,
+                /н([еи])( ?)(?=[а-яё]{3,})/g,
+                /([а-яё]+[аеёиоуыюя])(н+)(?=(?:[ыиао]й|[аоя]я|[аоеи](?:е|го|му)|ик|ица)(?:[^а-яё]|$))/g,
+                /([а-яё]{3,}[ао])го(?![а-яё])/g,
+                /([жчшщ])([еёо])/g,
+                /([^а-яё]|^)([мт])(ен|еб)я(?![а-яё])/g,
+                /в([ао]{1,2})бще/g,
+                /[бвгджзклмпрстфхцчшщ]{2}/g
             ].forEach((regExp, index) => {
-                const type = index + 1;
+                const type = index + 1;console.log(string);
+                string = string.replace(regExp, (...matches) => {
+                    if (Math.random() > this.misspellProbability[type]) return matches[0];
+                    console.log(`misspelling "${string}" with type ${type} @ ${matches[matches.length - 2]}`);
+                    switch (type) {
+                        case 1:
+                            return "т" + (matches[1] ? "" : "ь") + "ся";
+                        case 2:
+                            return matches[1] + "ш";
+                        case 3:
+                            return matches[1];
+                        case 4:
+                            const letter = matches[0].charAt(1);
+                            return matches[0].charAt(0) + (letter == "и" ? "ы" : letter == "а" ? "я" : "ю");
+                        case 5:
+                            return "чь" + matches[1];
+                        case 6:
+                            return "н" + matches[1] + (matches[2] ? "" : " ");
+                        case 7:
+                            return matches[1] + (matches[2].length == 1 ? "нн" : "н");
+                        case 8:
+                            return matches[1] + "ва";
+                        case 9:
+                            return matches[1] + (matches[2] == "е" || matches[2] == "ё" ? "о" : "е");
+                        case 10:
+                            return matches[1] + matches[2] + "я";
+                        case 11:
+                            return "ваще";
+                        case 12:
+                            return matches[0].charAt(0);
+                    }
+                });
             });
-        }*/
+        }
 
         return string;
 
