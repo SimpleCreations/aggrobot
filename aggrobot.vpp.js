@@ -525,6 +525,12 @@ const AggroBot = class {
      */
     _prepareQueuedResponses(message, queuedResponseOptions = {}) {
 
+        // Добавляем в конец фразы слово из набора addition
+        if (!/\?$/.test(message) && Math.random() < this._style.additionProbability) {
+            message += (Math.random() < this._style.additionLineBreakProbability ? " // " : " ") +
+                this._getMessage("addition");
+        }
+
         // Обрабатываем разбиения
         const splitResult = [];
         message.split(" // ").forEach(part => {
@@ -546,12 +552,10 @@ const AggroBot = class {
             push(buffer.trim());
         });
 
-
-
         // Добавляем ошибки
         splitResult.forEach(queued => queued.message = this._style.misspell(queued.message));
 
-        // Умножаем количество вопросительных и высклицательных знаков
+        // Умножаем количество вопросительных и восклицательных знаков
         for (let i = splitResult.length - 1; i >= 0; i--) {
             const queued = splitResult[i];
             if (!/[!?]$/.test(queued.message)) continue;
@@ -972,6 +976,10 @@ AggroBot.Style = class {
         this.mishitTypoProbability = Math.random() * (1 - this.swapTypoProbability);
         this.alterTypoProbability = 1 - this.swapTypoProbability - this.mishitTypoProbability;
 
+        /**
+         * Вероятность исправления опечатки в последующем сообщении
+         * @type {number}
+         */
         this.typoCorrectionProbabilityMultiplier = Math.pow(Math.random(), 1 / 4);
 
         /**
@@ -980,6 +988,10 @@ AggroBot.Style = class {
          */
         this.capitalize = Math.random() < AggroBot.Style._PROBABILITY_CAPITALIZE;
 
+        /**
+         * Вероятности допуска ошибок разных типов
+         * @type {Object}
+         */
         this.misspellProbability = {
 
             // Ошибка типа 0: замена а <-> о, и <-> е
@@ -1027,8 +1039,29 @@ AggroBot.Style = class {
 
         };
 
-        this.questionMarkDuplicationProbability = Math.pow(Math.max((Math.random() - 0.4) / 0.6, 0), 1 / 2);
-        this.questionMarkLineBreakProbability = (random => random < 0.6 ? 0 : random)(Math.random());
+        /**
+         * Вероятность того, что восклицательный или вопросительный знак в конце фразы будет в очередной раз повторён
+         * @type {number}
+         */
+        this.questionMarkDuplicationProbability = Math.pow(Math.max((Math.random() - 0.4) / 0.6, 0), 4.5);
+
+        /**
+         * Вероятность переноса восклицательного или вопросительного знака в следующее сообщение
+         * @type {number}
+         */
+        this.questionMarkLineBreakProbability = Math.max(2.5 * (Math.random() - 0.6), 0);
+
+        /**
+         * Вероятность вставки в конец фразы слова из набора addition
+         * @type {number}
+         */
+        this.additionProbability = Math.pow(Math.max((Math.random() - 0.45) / 0.6, 0), 3.7);
+
+        /**
+         * Вероятность написания этого слова в отдельном сообщении
+         * @type {number}
+         */
+        this.additionLineBreakProbability = Math.max(2.5 * (Math.random() - 0.6), 0);
 
     }
 
