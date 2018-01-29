@@ -795,6 +795,7 @@ Object.assign(AggroBot.Database, {
 
         const database = new AggroBot.Database();
         Object.keys(raw).forEach(key => {
+            if (!Array.isArray(raw[key])) return;
             const set = new AggroBot.ResponseSet();
             raw[key].forEach(string => set.add(new AggroBot.Response(new String(string))));
             database[key] = set;
