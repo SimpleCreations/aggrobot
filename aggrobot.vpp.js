@@ -510,6 +510,12 @@ const AggroBot = class {
                 case "nondirect":
                     if (this._directResponse) invalid = true;
                     break;
+                case "firstname":
+                    return AggroBot.firstName.toLowerCase();
+                case "lastname":
+                    return AggroBot.lastName.toLowerCase();
+                case "shortname":
+                    return AggroBot.shortName.toLowerCase();
                 case "m":
                 case "match":
                     return matches[+(args[0] || 0)] || "";
@@ -740,7 +746,22 @@ Object.assign(AggroBot, {
      */
     getSplitProbabilityByCurrentPart(message) {
         return 2 / (1 + Math.exp(-0.044 * message.length)) + 1;
-    }
+    },
+
+    /**
+     * Внутреннее имя бота
+     */
+    firstName: "Антон",
+
+    /**
+     * ... фамилия бота
+     */
+    lastName: "Васютин",
+
+    /**
+     * ... короткое имя бота
+     */
+    shortName: "Тоха"
 
 });
 
