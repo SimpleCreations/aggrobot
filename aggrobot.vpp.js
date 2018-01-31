@@ -823,7 +823,7 @@ AggroBot.Database = class {
     reset() {
 
         // noinspection JSCheckFunctionSignatures
-        Object.keys(this).forEach(key => this[key].reset());
+        Object.keys(this).forEach(key => key !== "answers" && this[key].reset());
 
     }
 
@@ -841,7 +841,7 @@ AggroBot.Database = class {
     /**
      * Возвращает случайный ответ по регулярному выражению с массивом совпадений в запоминающих скобках
      * @param {string} message
-     * @returns {{matches: null | Array<string>, response: AggroBot.Response} | null} случайный ответ и массив совпадений
+     * @returns {{matches: null | Array<string>, response: AggroBot.Response}} случайный ответ и массив совпадений
      */
     match(message) {
 
@@ -850,7 +850,10 @@ AggroBot.Database = class {
             if (response) return {response, matches};
         }
 
-        return null;
+        return {
+            response: null,
+            matches: null
+        };
 
     }
 
@@ -1049,13 +1052,13 @@ AggroBot.Matcher = class {
     /**
      * Выполняет поиск в строке по регулярному выражению
      * @param {string} string
-     * @returns {{matches: null | Array<string>, response: AggroBot.Response} | null} случайный ответ и массив совпадений
+     * @returns {{matches: null | Array<string>, response: AggroBot.Response}} случайный ответ и массив совпадений
      */
     match(string) {
 
         const matches = string.match(this.regExp);
-        if (!matches) return null;
-        const response = this.responses.getRandom();
+        let response = null;
+        if (matches) response = this.responses.getRandom();
         return {response, matches};
 
     }
