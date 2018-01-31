@@ -272,18 +272,23 @@ const AggroBot = class {
             });
         }
         else {
+            // Проверяем, занят ли бот
+            const ready = !this._responseQueue[0] || this._responseQueue.every(queued => !queued.blockQueue);
+            // Пытаемся найти ответ по регулярному выражению
+            const answer = this._getAnswer(request);
+            if (answer != null) this._processAndAddToQueue(answer, {
+                readDelay: AggroBot.getTimeToRead(request)
+            });
             // Добавляем в очередь новый первичный ответ, если бот не занят
-            if (!this._responseQueue[0] || this._responseQueue.every(queued => !queued.blockQueue)) {
-                this._processAndAddToQueue(this._getMessage("primary"), {
-                    readDelay: AggroBot.getTimeToRead(request)
+            else if (ready) this._processAndAddToQueue(this._getMessage("primary"), {
+                readDelay: AggroBot.getTimeToRead(request)
+            });
+            if (answer != null || ready) while (Math.random() < AggroBot.PROBABILITY_SECONDARY) {
+                this._processAndAddToQueue(this._getMessage("secondary"), {
+                    readDelay: AggroBot.TIME_ADDITIONAL_READ_DELAY,
+                    interruptOnTyping: false,
+                    discardOnMessage: true
                 });
-                while (Math.random() < AggroBot.PROBABILITY_SECONDARY) {
-                    this._processAndAddToQueue(this._getMessage("secondary"), {
-                        readDelay: AggroBot.TIME_ADDITIONAL_READ_DELAY,
-                        interruptOnTyping: false,
-                        discardOnMessage: true
-                    });
-                }
             }
         }
 
@@ -461,17 +466,29 @@ const AggroBot = class {
     }
 
     /**
-     * Возвращает случайное сообщение из базы сообщений по ключу
+     * Возвращает случаёное необработанное сообщение из базы сообщений по ключу
      * @param {string} databaseKey
      * @returns {string}
      * @private
      */
-    _getMessage(databaseKey) {
+    _getRawMessage(databaseKey) {
 
-        // Парсим функции и флаги внутри сообщения
-        // Временно: удаляем $
-        let retry = false;
-        let message = this._database.getRandom(databaseKey).string;
+        return this._database.getRandom(databaseKey).string;
+
+    }
+
+    /**
+     * Обрабатывает функции и флаги внутри строки
+     * @param {string} message
+     * @param {Array<string>} matches Массим совпадений для %m
+     * @returns {string | null}
+     * @private
+     */
+    _processMessage(message, matches = []) {
+
+        if (message == null) return null;
+
+        let invalid = false;
         message = message.replace(/%(\w+)(?:\(([^,)]*(?:,[^,)]*)*)\))?/g, (_, name, args) => {
 
             args = args ? args.split(",") : [];
@@ -487,20 +504,50 @@ const AggroBot = class {
                     return (this._userProfile.gender === AggroBot.UserProfile.Gender.MALE ? args[0] : args[1]) || "";
                 case "d":
                 case "direct":
-                    if (!this._directResponse) retry = true;
+                    if (!this._directResponse) invalid = true;
                     break;
                 case "nd":
                 case "nondirect":
-                    if (this._directResponse) retry = true;
+                    if (this._directResponse) invalid = true;
                     break;
+                case "m":
+                case "match":
+                    return matches[+(args[0] || 0)] || "";
             }
 
             return "";
 
         }).replace(/[$@]\w+/g, "");
+        return !invalid ? message : null;
 
-        if (retry) return this._getMessage(databaseKey);
-        return message;
+    }
+
+    /**
+     * Возвращает случайное сообщение из базы сообщений по ключу
+     * @param {string} databaseKey
+     * @returns {string}
+     * @private
+     */
+    _getMessage(databaseKey) {
+
+        let message = this._processMessage(this._getRawMessage(databaseKey));
+        return message != null ? message : this._getMessage(databaseKey);
+
+    }
+
+    /**
+     * По возможности возвращает ответ на сообщение по регулярному выражению
+     * @param {string} request
+     * @returns {string | null}
+     * @private
+     */
+    _getAnswer(request) {
+
+        const {response, matches} = this._database.match(request);
+        if (response == null) return null;
+
+        let message = this._processMessage(response.string, matches);
+        return message != null ? message : this._getAnswer(request);
 
     }
 
@@ -761,6 +808,15 @@ AggroBot.QueuedResponse = class {
  */
 AggroBot.Database = class {
 
+    constructor() {
+
+        /**
+         * @type {Array<AggroBot.Matcher>}
+         */
+        this.answers = [];
+
+    }
+
     /**
      * Генерирует новое состояние базы сообщений
      */
@@ -782,6 +838,22 @@ AggroBot.Database = class {
 
     }
 
+    /**
+     * Возвращает случайный ответ по регулярному выражению с массивом совпадений в запоминающих скобках
+     * @param {string} message
+     * @returns {{matches: null | Array<string>, response: AggroBot.Response} | null} случайный ответ и массив совпадений
+     */
+    match(message) {
+
+        for (let matcher of this.answers) {
+            const {response, matches} = matcher.match(message);
+            if (response) return {response, matches};
+        }
+
+        return null;
+
+    }
+
 };
 
 Object.assign(AggroBot.Database, {
@@ -795,10 +867,28 @@ Object.assign(AggroBot.Database, {
 
         const database = new AggroBot.Database();
         Object.keys(raw).forEach(key => {
-            if (!Array.isArray(raw[key])) return;
+            if (key === "answers") return;
             const set = new AggroBot.ResponseSet();
             raw[key].forEach(string => set.add(new AggroBot.Response(new String(string))));
             database[key] = set;
+        });
+
+        if (typeof raw.answers === "object") Object.keys(raw.answers).forEach(regExpStr => {
+            const set = new AggroBot.ResponseSet();
+            raw.answers[regExpStr].forEach(string => {
+                const response = new AggroBot.Response(new String(string));
+                response.unique = true;
+                set.add(response);
+            });
+            let regExp;
+            try {
+                regExp = new RegExp(regExpStr, "i");
+            }
+            catch (error) {
+                console.log("Invalid regular expression in answers: ", regExpStr);
+                return;
+            }
+            database.answers.push(new AggroBot.Matcher(regExp, set));
         });
 
         return database;
@@ -815,9 +905,19 @@ Object.assign(AggroBot.Database, {
         const database = new AggroBot.Database();
         // noinspection JSCheckFunctionSignatures
         Object.keys(anotherDatabase).forEach(key => {
+            if (key === "answers") return;
             const set = new AggroBot.ResponseSet();
             anotherDatabase[key].forEach(response => set.add(new AggroBot.Response(response.string)));
             database[key] = set;
+        });
+        anotherDatabase.answers.forEach(matcher => {
+            const set = new AggroBot.ResponseSet();
+            matcher.responses.forEach(response => {
+                const newResponse = new AggroBot.Response(response.string);
+                newResponse.unique = true;
+                set.add(newResponse);
+            });
+            database.answers.push(new AggroBot.Matcher(matcher.regExp, set));
         });
 
         return database;
@@ -868,8 +968,8 @@ AggroBot.ResponseSet = class {
      */
     reset() {
 
-        this._totalAvailable = this._array.length;
-        this.forEach(response => response.used = false);
+        this._totalAvailable = 0;
+        this.forEach(response => !response.unique && ++this._totalAvailable && (response.used = false));
 
     }
 
@@ -878,6 +978,8 @@ AggroBot.ResponseSet = class {
      * @returns {AggroBot.Response}
      */
     getRandom() {
+
+        if (!this._totalAvailable) return null;
 
         const index = Math.floor(Math.random() * this._totalAvailable);
         let counter = 0;
@@ -919,6 +1021,42 @@ AggroBot.Response = class {
          * @type {boolean}
          */
         this.used = false;
+
+        /**
+         * Уникальный ли ответ
+         * @type {boolean}
+         */
+        this.unique = false;
+
+    }
+
+};
+
+AggroBot.Matcher = class {
+
+    /**
+     * @constructor
+     * @param {RegExp} regExp
+     * @param {AggroBot.ResponseSet} responses
+     */
+    constructor(regExp, responses) {
+
+        this.regExp = regExp;
+        this.responses = responses;
+
+    }
+
+    /**
+     * Выполняет поиск в строке по регулярному выражению
+     * @param {string} string
+     * @returns {{matches: null | Array<string>, response: AggroBot.Response} | null} случайный ответ и массив совпадений
+     */
+    match(string) {
+
+        const matches = string.match(this.regExp);
+        if (!matches) return null;
+        const response = this.responses.getRandom();
+        return {response, matches};
 
     }
 
