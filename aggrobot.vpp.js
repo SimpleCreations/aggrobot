@@ -1255,7 +1255,7 @@ AggroBot.Style = class {
         let result = match ? match[0] : "";
         const corrections = [];
 
-        const regExp = /([а-яё]+)([^а-яё]+|$)/ig;
+        const regExp = /([а-яё\d]+)([^а-яё\d]+|$)/ig;
         let lastCorrected = false;
         let matches;
         while (matches = regExp.exec(string)) {
@@ -1317,7 +1317,7 @@ AggroBot.Style = class {
 
         // Тип 0
         {
-            const wordRegExp = /([а-яё]+)([^а-яё]+|$)/ig;
+            const wordRegExp = /([а-яё\d]+)([^а-яё\d]+|$)/ig;
             const letterRegExp = /[аеёиоуыэюя](?=[а-яё])/g;
             let result = "";
             let matches;
