@@ -355,7 +355,7 @@ const AggroBot = class {
         // Иначе запускаем таймер неактивности собеседника.
         const queued = this._responseQueue[0];
         if (queued) this._readTimeout = setTimeout(this._setReadingFinished.bind(this), queued.readDelay);
-        else if (this._intendsToLeave) setTimeout(this.onConversationFinish().bind(this), 100);
+        else if (this._intendsToLeave) setTimeout(this.onConversationFinish.bind(this), 100);
         else this._resetInactiveTimeout();
 
     }
