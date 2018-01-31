@@ -84,7 +84,10 @@ const enableScript = () => {
         aggroBot.onTypingStart = () => chat.isChatStarted() && chat.setStartedTyping();
         aggroBot.onTypingFinish = () => chat.isChatStarted() && chat.setFinishedTyping();
         aggroBot.onMessageReady = message => chat.isChatStarted() && chat.sendMessage(message);
-        aggroBot.onConversationFinish = () => chat.isChatStarted() && chat.close();
+        aggroBot.onConversationFinish = () => {
+            aggroBot.suspend();
+            chat.isChatStarted() && chat.close();
+        };
         aggroBot.onReport = message => chat.log(message);
 
         chat.removeEventListener("aggrobot");
@@ -180,6 +183,13 @@ const AggroBot = class {
         this._directResponse = false;
 
         /**
+         * Намеревается ли бот покинуть чат после опустошения очереди
+         * @type {boolean}
+         * @private
+         */
+        this._intendsToLeave = false;
+
+        /**
          * Информация о пользователе
          * @type {AggroBot.UserProfile}
          * @private
@@ -232,6 +242,7 @@ const AggroBot = class {
 
         // Полученное сообщение считается активностью, поэтому сбрасываем счётчик
         this._inactivityCounter = 0;
+        this._intendsToLeave = false;
 
         this._directResponse = true;
 
@@ -344,6 +355,7 @@ const AggroBot = class {
         // Иначе запускаем таймер неактивности собеседника.
         const queued = this._responseQueue[0];
         if (queued) this._readTimeout = setTimeout(this._setReadingFinished.bind(this), queued.readDelay);
+        else if (this._intendsToLeave) setTimeout(this.onConversationFinish().bind(this), 100);
         else this._resetInactiveTimeout();
 
     }
@@ -385,7 +397,7 @@ const AggroBot = class {
     _resetInactiveTimeout() {
 
         clearTimeout(this._activityCheckTimeout);
-        this._activityCheckTimeout = setTimeout(() => {
+        if(!this._intendsToLeave) this._activityCheckTimeout = setTimeout(() => {
             this._activityCheckTimeout = null;
             switch (++this._inactivityCounter) {
                 case 1:
@@ -397,8 +409,12 @@ const AggroBot = class {
                         discardOnMessage: true
                     });
                     break;
-                default:
-                    this.onConversationFinish();
+                case 4:
+                    this._intendsToLeave = true;
+                    this._processAndAddToQueue(this._getMessage("before_leaving"), {
+                        discardOnMessage: true
+                    });
+                    break;
             }
         }, AggroBot.TIME_INCREMENT_INACTIVE_COUNTER);
 
