@@ -286,15 +286,16 @@ const AggroBot = class {
             // Проверяем, занят ли бот
             const ready = !this._responseQueue[0] || this._responseQueue.every(queued => !queued.blockQueue);
             // Пытаемся найти ответ по регулярному выражению
-            const answer = this._getAnswer(request);
-            if (answer != null) this._processAndAddToQueue(answer, {
-                readDelay: AggroBot.getTimeToRead(request)
+            const {message, pattern} = this._getAnswer(request);
+            if (message != null) this._processAndAddToQueue(message, {
+                readDelay: AggroBot.getTimeToRead(request),
+                pattern: pattern
             });
             // Добавляем в очередь новый первичный ответ, если бот не занят
             else if (ready) this._processAndAddToQueue(this._getMessage("primary"), {
                 readDelay: AggroBot.getTimeToRead(request)
             });
-            if (answer != null || ready) while (Math.random() < AggroBot.PROBABILITY_SECONDARY) {
+            if (message != null || ready) while (Math.random() < AggroBot.PROBABILITY_SECONDARY) {
                 this._processAndAddToQueue(this._getMessage("secondary"), {
                     readDelay: AggroBot.TIME_ADDITIONAL_READ_DELAY,
                     interruptOnTyping: false,
@@ -349,7 +350,7 @@ const AggroBot = class {
     _setQueueUpdated() {
 
         // Ничего не делаем, если бот уже читает запрос или пишет ответ
-        if (this._readTimeout || this._typeTimeout) return;
+        if (this._readTimeout || this._typeTimeout || this._interruptedTimeout) return;
 
         // Если очередь не пустая, запускаем таймер чтения последнего сообщения.
         // Иначе запускаем таймер неактивности собеседника.
@@ -496,7 +497,7 @@ const AggroBot = class {
     /**
      * Обрабатывает функции и флаги внутри строки
      * @param {string} message
-     * @param {Array<string>} matches Массим совпадений для %m
+     * @param {Array<string>} matches Массив совпадений для %m
      * @returns {string | null}
      * @private
      */
@@ -560,16 +561,21 @@ const AggroBot = class {
     /**
      * По возможности возвращает ответ на сообщение по регулярному выражению
      * @param {string} request
-     * @returns {string | null}
+     * @returns {{message: string | null, pattern: RegExp | null}}
      * @private
      */
     _getAnswer(request) {
 
-        const {response, matches} = this._database.match(request);
-        if (response == null) return null;
+        const {response, matches, pattern} = this._database.match(request);
+        let message = null;
 
-        let message = this._processMessage(response.string, matches);
-        return message != null ? message : this._getAnswer(request);
+        // Отменяем ответ по регулярному выражению, если ответ на это же самое выражение уже есть в очереди
+        if (response != null && !this._responseQueue.some(queued => queued.pattern === pattern)) {
+            message = this._processMessage(response.string, matches);
+            if (message == null) return this._getAnswer(request);
+        }
+
+        return {message, pattern};
 
     }
 
@@ -687,10 +693,10 @@ const AggroBot = class {
     _determineGender(message) {
 
         let gender;
-        if (/(^|[^а-яё])(я?([жд]|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)|я\s+[а-яё]{3,}ая?)($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я\s+не\s+([мmп]|парень?|пацан|мальчик|муж(ик|чина)?)($|[^а-яё])|((я|меня)\s+|^)(Александра|Алина|Алиса|Алла|Анастасия|Настя|Анна|Аня|Адель|Валерия|Вера|Виктория|Вика|Галя|Дарья|Даша|Диана|Ева|Евгения|Екатерина|Катя|Елена|Лена|Елизавета|Лиза|Ира|Ирина|Карина|Кира|Кристина|Ксения|Ксюша|Лариса|Лида|Лилия|Люба|Людмила|Люда|Маргарита|Рита|Марина|Мария|Маша|Милена|Надежда|Надя|Наталья|Наташа|Ника|Нина|Оксана|Олеся|Ольга|Оля|Полина|Светлана|Света|Софья|Соня|Татьяна|Таня|Ульяна|Юлия|Юля|Яна)[^а-яё?]/i.test(message)) {
+        if (/(^[^а-яё]*я? ?([жд]|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)|(^|[^а-яё])я\s+[а-яё]{3,}ая?)($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я\s+не\s+([мmп]|парень?|пацан|мальчик|муж(ик|чина)?)($|[^а-яё])|((я|меня)\s+|^)(Александра|Алина|Алиса|Алла|Анастасия|Настя|Анна|Аня|Адель|Валерия|Вера|Виктория|Вика|Галя|Дарья|Даша|Диана|Ева|Евгения|Екатерина|Катя|Елена|Лена|Елизавета|Лиза|Ира|Ирина|Карина|Кира|Кристина|Ксения|Ксюша|Лариса|Лида|Лилия|Люба|Людмила|Люда|Маргарита|Рита|Марина|Мария|Маша|Милена|Надежда|Надя|Наталья|Наташа|Ника|Нина|Оксана|Олеся|Ольга|Оля|Полина|Светлана|Света|Софья|Соня|Татьяна|Таня|Ульяна|Юлия|Юля|Яна)[^а-яё?]/i.test(message)) {
             gender = AggroBot.UserProfile.Gender.FEMALE;
         }
-        else if (/(^|[^а-яё])(я?([мmп]|парень?|пацан|мальчик|муж(ик|чина)?)|я\s+[а-яё]{2,}(ый|л))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я\s+не\s+([жд]|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)($|[^а-яё])|((я|меня)\s+|^)(Александр|Алексей|Леша|Леха|Андрей|Антон|Артем|Артур|Ваня|Василий|Вася|Виктор|Витя|Виталий|Владимир|Вова|Влад|Глеб|Григорий|Гриша|Даниил|Данила|Денис|Дмитрий|Дима|Евгений|Егор|Иван|Игорь|Илья|Кирилл|Костя|Макс|Матвей|Михаил|Миша|Никита|Николай|Коля|Олег|Павел|Паша|Рома|Семен|Сема|Сергей|Стас|Тимур|Юрий|Юра)[^а-яё?]/i.test(message)) {
+        else if (/(^[^а-яё]*я? ?(м|парень?|пацан|мальчик|муж(ик|чина)?)|(^|[^а-яё])я\s+[а-яё]{2,}(ый|л))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я\s+не\s+([жд]|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)($|[^а-яё])|((я|меня)\s+|^)(Александр|Алексей|Леша|Леха|Андрей|Антон|Артем|Артур|Ваня|Василий|Вася|Виктор|Витя|Виталий|Владимир|Вова|Влад|Глеб|Григорий|Гриша|Даниил|Данила|Денис|Дмитрий|Дима|Евгений|Егор|Иван|Игорь|Илья|Кирилл|Костя|Макс|Матвей|Михаил|Миша|Никита|Николай|Коля|Олег|Павел|Паша|Рома|Семен|Сема|Сергей|Стас|Тимур|Юрий|Юра)[^а-яё?]/i.test(message)) {
             gender = AggroBot.UserProfile.Gender.MALE;
         }
 
@@ -835,6 +841,12 @@ AggroBot.QueuedResponse = class {
          */
         this.blockQueue = true;
 
+        /**
+         * Шаблон, по которому найден ответ
+         * @type {RegExp}
+         */
+        this.pattern = null;
+
     }
 
 };
@@ -878,18 +890,19 @@ AggroBot.Database = class {
     /**
      * Возвращает случайный ответ по регулярному выражению с массивом совпадений в запоминающих скобках
      * @param {string} message
-     * @returns {{matches: null | Array<string>, response: AggroBot.Response}} случайный ответ и массив совпадений
+     * @returns {{matches: Array<string> | null, response: AggroBot.Response | null, pattern: RegExp | null}} случайный ответ и массив совпадений
      */
     match(message) {
 
         for (let matcher of this.answers) {
-            const {response, matches} = matcher.match(message);
-            if (response) return {response, matches};
+            const {response, matches, pattern} = matcher.match(message);
+            if (response) return {response, matches, pattern};
         }
 
         return {
             response: null,
-            matches: null
+            matches: null,
+            pattern: null
         };
 
     }
@@ -1089,14 +1102,15 @@ AggroBot.Matcher = class {
     /**
      * Выполняет поиск в строке по регулярному выражению
      * @param {string} string
-     * @returns {{matches: null | Array<string>, response: AggroBot.Response}} случайный ответ и массив совпадений
+     * @returns {{matches: null | Array<string>, response: AggroBot.Response | null, pattern: RegExp | null}} случайный ответ и массив совпадений
      */
     match(string) {
 
-        const matches = string.match(this.regExp);
+        const pattern = this.regExp;
+        const matches = string.match(pattern);
         let response = null;
         if (matches) response = this.responses.getRandom();
-        return {response, matches};
+        return {response, matches, pattern};
 
     }
 
@@ -1202,7 +1216,7 @@ AggroBot.Style = class {
             8: AggroBot.Style._getTwoOptionProbability(0.06, 0.8),
 
             // Ошибка типа 9: шо <-> ше, чо <-> чё, що <-> ще
-            9: AggroBot.Style._getTwoOptionProbability(0.1, 0.5),
+            9: Math.random(),
 
             // Стиль типа 10: меня -> мя, тебя -> тя
             10: AggroBot.Style._getTwoOptionProbability(0.05, 0.5),
