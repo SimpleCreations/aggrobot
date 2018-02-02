@@ -536,6 +536,29 @@ const AggroBot = class {
                 case "m":
                 case "match":
                     return matches[+(args[0] || 0)] || "";
+                case "timeschedule": {
+                    const to12HourFormat = hours => hours % 12 || 12;
+                    const toFullHourFormat = hours => {
+                        const hours12 = to12HourFormat(hours);
+                        return hours12 == 1 ? "час" : `${hours12} час${hours12 < 5 ? "а" : "ов"}`;
+                    };
+                    const now = new Date();
+                    const minutes = now.getMinutes();
+                    const hours = now.getHours();
+                    if (minutes <= 15) return toFullHourFormat(hours);
+                    if (minutes < 45) return `${minutes <= 25 ? "почти" : ""} пол ${to12HourFormat(hours + 1)}`;
+                    return "почти " + toFullHourFormat(hours);
+                }
+                case "timeofday": {
+                    const now = new Date();
+                    const hours = now.getHours() + now.getMinutes() / 100;
+                    if (hours < 5.30 || hours > 23.30) return "посреди ночи";
+                    if (hours < 12) return "с утра";
+                    if (hours < 18) return "посреди дня";
+                    return "весь вечер";
+                }
+                case "timedayofweek":
+                    return ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"][new Date().getDay()];
             }
 
             return "";
@@ -720,7 +743,7 @@ Object.assign(AggroBot, {
      * @returns {number}
      */
     getTimeToRead(message) {
-        return 850 + 350 * (message + " ").match(/\s+/g).length;
+        return 850 + 350 * (message + " ").match(/\s/g).length;
     },
 
     /**
