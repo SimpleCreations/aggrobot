@@ -28,16 +28,13 @@ $.ajax({
     .pipe(response => response["script_version"] ? response : $.Deferred().reject())
     .done(response => {
 
-        log(compareVersions(response["script_version"], VPPScript.meta["version"]) < 0 ?
-
-            `Вы используете устаревший скрипт.<br>
+        if (compareVersions(response["script_version"], VPPScript.meta["version"]) < 0) {
+            return log(`Вы используете устаревший скрипт.<br>
 Текущая версия: ${VPPScript.meta["version"]}<br>
 Последняя версия: ${response["script_version"]}<br>
-Введите "/aggrobot download", чтобы скачать последнюю версию.` :
-
-            `Вы используете последнюю версию скрипта.`
-
-        );
+Введите "/aggrobot download", чтобы скачать последнюю версию.`);
+        }
+        log("Вы используете последнюю версию скрипта.");
 
         if (!response["database_version"]) return log("Не удалось получить последнюю версию базы сообщений.");
         const currentDatabaseVersion = VPPScript.storage.databaseVersion;
@@ -398,7 +395,7 @@ const AggroBot = class {
     _resetInactiveTimeout() {
 
         clearTimeout(this._activityCheckTimeout);
-        if(!this._intendsToLeave) this._activityCheckTimeout = setTimeout(() => {
+        if (!this._intendsToLeave) this._activityCheckTimeout = setTimeout(() => {
             this._activityCheckTimeout = null;
             switch (++this._inactivityCounter) {
                 case 1:
@@ -536,6 +533,14 @@ const AggroBot = class {
                 case "m":
                 case "match":
                     return (matches[+(args[0] || 0)] || "").toLowerCase();
+                case "ifm":
+                case "ifmatch":
+                    invalid = !matches[+args[0]];
+                    break;
+                case "ifnm":
+                case "ifnomatch":
+                    invalid = !!matches[+args[0]];
+                    break;
                 case "timeschedule": {
                     const to12HourFormat = hours => hours % 12 || 12;
                     const toFullHourFormat = hours => {
@@ -649,6 +654,39 @@ const AggroBot = class {
             // noinspection JSUnusedAssignment
             push(buffer.trim());
         });
+        
+        // Вставляем слова из специальных наборов
+        splitResult.forEach(queued => {
+            const wordRegExp = AggroBot.Style.wordRegExp;
+            wordRegExp.lastIndex = 0;
+            queued.message = queued.message.replace(wordRegExp, match =>
+                (Math.random() < this._style.insideInsertionProbability ? this._getMessage("insert_inside") + " " : "") + match);
+            if (Math.random() < this._style.afterInsertionProbability) {
+                queued.message = queued.message.replace(/[^а-яё\d]*$/, this._getMessage("insert_after") + "$&");
+            }
+        });
+
+        const letterRegExp = /[аеёиоуыэюя](?=[а-яё])/g;
+        let result = "";
+        let matches;
+        while (matches = wordRegExp.exec(string)) {
+            const part = matches[0];
+            const letters = part.match(letterRegExp);
+            if (!letters || letters.length < 2) { // Пропускаем короткие слова
+                result += part;
+                continue;
+            }
+            result += part.replace(letterRegExp, (letter, offset) => {
+                if ("аоеи".indexOf(letter) == -1 || Math.random() > this.misspellProbability[0]) return letter;
+                console.log(`misspelling "${part}" with type 0 @ ${offset}`);
+                switch (letter) {
+                    case "а": return "о";
+                    case "о": return "а";
+                    case "е": return "и";
+                    case "и": return "е";
+                }
+            });
+        }
 
         // Добавляем ошибки
         splitResult.forEach(queued => queued.message = this._style.misspell(queued.message));
@@ -1279,6 +1317,18 @@ AggroBot.Style = class {
          */
         this.additionLineBreakProbability = Math.max(2.5 * (Math.random() - 0.6), 0);
 
+        /**
+         * Вероятность вставки в любое место фразы слова из набора insert_inside
+         * @type {number}
+         */
+        this.insideInsertionProbability = Math.pow(2, 8 * Math.random() - 9.7);
+
+        /**
+         * Вероятность вставки в конец фразы слова из набора insert_after
+         * @type {number}
+         */
+        this.afterInsertionProbability = Math.pow(2, 7 * Math.random() - 8);
+
     }
 
     /**
@@ -1292,7 +1342,8 @@ AggroBot.Style = class {
         let result = match ? match[0] : "";
         const corrections = [];
 
-        const regExp = /([а-яё\d]+)([^а-яё\d]+|$)/ig;
+        const regExp = AggroBot.Style.wordRegExp;
+        regExp.lastIndex = 0;
         let lastCorrected = false;
         let matches;
         while (matches = regExp.exec(string)) {
@@ -1354,7 +1405,8 @@ AggroBot.Style = class {
 
         // Тип 0
         {
-            const wordRegExp = /([а-яё\d]+)([^а-яё\d]+|$)/ig;
+            const wordRegExp = AggroBot.Style.wordRegExp;
+            wordRegExp.lastIndex = 0;
             const letterRegExp = /[аеёиоуыэюя](?=[а-яё])/g;
             let result = "";
             let matches;
@@ -1380,58 +1432,56 @@ AggroBot.Style = class {
         }
 
         // Тип 1–11
-        {
-            [
-                /т(ь?)ся(?![а-яё])/g,
-                /([еёи])шь(?![а-яё])/g,
-                /([аоуыэюя][жчшщ])(ь?)(?![а-яё])/g,
-                /[жш]и|[чщ][ау]/g,
-                /ч([кн])/g,
-                /([^а-яё]|^)н([еи])( ?)(?=[а-яё]{3,})/g,
-                /([а-яё]+[аеёиоуыюя])(н+)(?=(?:[ыиао]й|[аоя]я|[аоеи](?:е|го|му)|ик|ица)(?:[^а-яё]|$))/g,
-                /([а-яё]{3,}[аоеи])го(?![а-яё])/g,
-                /([жчшщ])([еёо])(?=[а-чщ-яё])/g,
-                /([^а-яё]|^)([мт])(ен|еб)я(?![а-яё])/g,
-                /в([ао]{1,2})бще/g,
-                /([бвгджзклмпрстфхцчшщ])\1/g,
-                /ть?ся(?![а-яё])/g
-            ].forEach((regExp, index) => {
-                const type = index + 1;
-                string = string.replace(regExp, (...matches) => {
-                    if (Math.random() > this.misspellProbability[type]) return matches[0];
-                    console.log(`misspelling "${string}" with type ${type} @ ${matches[matches.length - 2]}`);
-                    switch (type) {
-                        case 1:
-                            return "т" + (matches[1] ? "" : "ь") + "ся";
-                        case 2:
-                            return matches[1] + "ш";
-                        case 3:
-                            return matches[1];
-                        case 4:
-                            const letter = matches[0].charAt(1);
-                            return matches[0].charAt(0) + (letter == "и" ? "ы" : letter == "а" ? "я" : "ю");
-                        case 5:
-                            return "чь" + matches[1];
-                        case 6:
-                            return matches[1] + "н" + matches[2] + (matches[3] ? "" : " ");
-                        case 7:
-                            return matches[1] + (matches[2].length == 1 ? "нн" : "н");
-                        case 8:
-                            return matches[1] + "ва";
-                        case 9:
-                            return matches[1] + (matches[2] == "е" || matches[2] == "ё" ? "о" : "е");
-                        case 10:
-                            return matches[1] + matches[2] + "я";
-                        case 11:
-                            return "ваще";
-                        case 12:
-                            return matches[1];
-                        case 13:
-                            return "ца";
-                    }
-                });
+        [
+            /т(ь?)ся(?![а-яё])/g,
+            /([еёи])шь(?![а-яё])/g,
+            /([аоуыэюя][жчшщ])(ь?)(?![а-яё])/g,
+            /[жш]и|[чщ][ау]/g,
+            /ч([кн])/g,
+            /([^а-яё]|^)н([еи])( ?)(?=[а-яё]{3,})/g,
+            /([а-яё]+[аеёиоуыюя])(н+)(?=(?:[ыиао]й|[аоя]я|[аоеи](?:е|го|му)|ик|ица)(?:[^а-яё]|$))/g,
+            /([а-яё]{3,}[аоеи])го(?![а-яё])/g,
+            /([жчшщ])([еёо])(?=[а-чщ-яё])/g,
+            /([^а-яё]|^)([мт])(ен|еб)я(?![а-яё])/g,
+            /в([ао]{1,2})бще/g,
+            /([бвгджзклмпрстфхцчшщ])\1/g,
+            /ть?ся(?![а-яё])/g
+        ].forEach((regExp, index) => {
+            const type = index + 1;
+            string = string.replace(regExp, (...matches) => {
+                if (Math.random() > this.misspellProbability[type]) return matches[0];
+                console.log(`misspelling "${string}" with type ${type} @ ${matches[matches.length - 2]}`);
+                switch (type) {
+                    case 1:
+                        return "т" + (matches[1] ? "" : "ь") + "ся";
+                    case 2:
+                        return matches[1] + "ш";
+                    case 3:
+                        return matches[1];
+                    case 4:
+                        const letter = matches[0].charAt(1);
+                        return matches[0].charAt(0) + (letter == "и" ? "ы" : letter == "а" ? "я" : "ю");
+                    case 5:
+                        return "чь" + matches[1];
+                    case 6:
+                        return matches[1] + "н" + matches[2] + (matches[3] ? "" : " ");
+                    case 7:
+                        return matches[1] + (matches[2].length == 1 ? "нн" : "н");
+                    case 8:
+                        return matches[1] + "ва";
+                    case 9:
+                        return matches[1] + (matches[2] == "е" || matches[2] == "ё" ? "о" : "е");
+                    case 10:
+                        return matches[1] + matches[2] + "я";
+                    case 11:
+                        return "ваще";
+                    case 12:
+                        return matches[1];
+                    case 13:
+                        return "ца";
+                }
             });
-        }
+        });
 
         return string;
 
@@ -1441,6 +1491,11 @@ AggroBot.Style = class {
 
 // noinspection NonAsciiCharacters
 Object.assign(AggroBot.Style, {
+
+    /**
+     * Регулярное выражение для поиска слов
+     */
+    wordRegExp: /([а-яё\d]+)([^а-яё\d]+|$)/ig,
 
     /**
      * Возможные подмены букв с целью симуляции опечатки
