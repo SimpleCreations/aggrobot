@@ -662,31 +662,9 @@ const AggroBot = class {
             queued.message = queued.message.replace(wordRegExp, match =>
                 (Math.random() < this._style.insideInsertionProbability ? this._getMessage("insert_inside") + " " : "") + match);
             if (Math.random() < this._style.afterInsertionProbability) {
-                queued.message = queued.message.replace(/[^а-яё\d]*$/, this._getMessage("insert_after") + "$&");
+                queued.message = queued.message.replace(/[^а-яё\d]*$/, ` ${this._getMessage("insert_after")}$&`);
             }
         });
-
-        const letterRegExp = /[аеёиоуыэюя](?=[а-яё])/g;
-        let result = "";
-        let matches;
-        while (matches = wordRegExp.exec(string)) {
-            const part = matches[0];
-            const letters = part.match(letterRegExp);
-            if (!letters || letters.length < 2) { // Пропускаем короткие слова
-                result += part;
-                continue;
-            }
-            result += part.replace(letterRegExp, (letter, offset) => {
-                if ("аоеи".indexOf(letter) == -1 || Math.random() > this.misspellProbability[0]) return letter;
-                console.log(`misspelling "${part}" with type 0 @ ${offset}`);
-                switch (letter) {
-                    case "а": return "о";
-                    case "о": return "а";
-                    case "е": return "и";
-                    case "и": return "е";
-                }
-            });
-        }
 
         // Добавляем ошибки
         splitResult.forEach(queued => queued.message = this._style.misspell(queued.message));
