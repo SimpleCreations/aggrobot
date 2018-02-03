@@ -659,11 +659,26 @@ const AggroBot = class {
         splitResult.forEach(queued => {
             const wordRegExp = AggroBot.Style.wordRegExp;
             wordRegExp.lastIndex = 0;
-            queued.message = queued.message.replace(wordRegExp, match =>
-                (Math.random() < this._style.insideInsertionProbability ? this._getMessage("insert_inside") + " " : "") + match);
+            let changed = false;
+            let lastWord = "";
+            queued.message = queued.message.replace(wordRegExp, (match, p1) => {
+                let replacement = match;
+                if (Math.random() < this._style.insideInsertionProbability) {
+                    const word = this._getMessage("insert_inside");
+                    if (p1 != word && lastWord != word && AggroBot.Style.prepositionsOrConjunctions.indexOf(lastWord) == -1) {
+                        replacement = word;
+                        changed = true;
+                    }
+                    else console.log(`@@@ Not inserting because ${p1} or ${lastWord} == ${word} or ${lastWord} is a prop or conj`);
+                }
+                lastWord = p1;
+                return replacement;
+            });
             if (Math.random() < this._style.afterInsertionProbability) {
                 queued.message = queued.message.replace(/[^а-яё\d]*$/, ` ${this._getMessage("insert_after")}$&`);
+                changed = true;
             }
+            if (changed) queued.calculateTypeDelay();
         });
 
         // Добавляем ошибки
@@ -851,12 +866,6 @@ AggroBot.QueuedResponse = class {
         this.readDelay = 0;
 
         /**
-         * Время, необходимое для печати ответа
-         * @type {number}
-         */
-        this.typeDelay = AggroBot.getTimeToType(message);
-
-        /**
          * Флаг: будет ли чтение или набор прервано новым сообщением от собеседника
          * @type {boolean}
          */
@@ -885,6 +894,21 @@ AggroBot.QueuedResponse = class {
          * @type {RegExp}
          */
         this.pattern = null;
+
+        this.calculateTypeDelay();
+
+    }
+
+    /**
+     * Считает время, необходимое для печати ответа
+     */
+    calculateTypeDelay() {
+
+        /**
+         * Время, необходимое для печати ответа
+         * @type {number}
+         */
+        this.typeDelay = AggroBot.getTimeToType(this.message);
 
     }
 
@@ -1071,20 +1095,21 @@ AggroBot.ResponseSet = class {
      */
     getRandom() {
 
-        if (!this._totalAvailable) return null;
+        if (!this._totalAvailable) {
+            this.reset();
+            if (!this._totalAvailable) return null;
+        }
 
         const index = Math.floor(Math.random() * this._totalAvailable);
         let counter = 0;
         for (let response of this._array) if (!response.used) {
             if (index == counter) {
                 response.used = true;
+                this._totalAvailable--;
                 return response;
             }
             counter++;
         }
-
-        this.reset();
-        return this.getRandom();
 
     }
 
@@ -1520,7 +1545,17 @@ Object.assign(AggroBot.Style, {
     _getTwoOptionProbability(slope, balance) {
         const random = Math.random();
         return slope * random + (random <= balance ? 0 : 1 - slope);
-    }
+    },
+
+    /**
+     * Предлоги или союзы, после которых не может быть вставлено слово
+     */
+    prepositionsOrConjunctions: [
+        "без", "в", "вне", "во", "вроде", "возле", "внутрь", "внутри", "вокруг", "для", "до", "за", "из",
+        "к", "кроме", "ко", "между", "мимо", "на", "над", "надо", "о", "об", "обо", "около", "от",
+        "ото", "перед", "передо", "по", "под", "подо", "после", "при", "про", "против", "ради", "с", "среди",
+        "сзади", "снизу", "а", "даже", "если", "и", "или", "как", "когда", "но", "пока", "пусть", "тоже", "не", "ни"
+    ]
 
 });
 
