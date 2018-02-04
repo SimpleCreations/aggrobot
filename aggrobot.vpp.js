@@ -666,7 +666,7 @@ const AggroBot = class {
                 if (Math.random() < this._style.insideInsertionProbability) {
                     const word = this._getMessage("insert_inside");
                     if (p1 != word && lastWord != word && AggroBot.Style.prepositionsOrConjunctions.indexOf(lastWord) == -1) {
-                        replacement = word;
+                        replacement = `${word} ${match}`;
                         changed = true;
                     }
                     else console.log(`@@@ Not inserting because ${p1} or ${lastWord} == ${word} or ${lastWord} is a prop or conj`);
