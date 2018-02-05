@@ -200,6 +200,20 @@ const AggroBot = class {
          */
         this._style = new AggroBot.Style();
 
+        /**
+         * Переменные, подставляемые во фразы
+         * @type {object}
+         * @private
+         */
+        this._variables = {};
+
+        /**
+         * Детектор флуда/спама
+         * @type {AggroBot.SpamDetector}
+         * @private
+         */
+        this._spamChecker = new AggroBot.SpamDetector();
+
     }
 
     /**
@@ -263,7 +277,20 @@ const AggroBot = class {
         if (nextQueued) {
             if (nextQueued.interruptOnMessage) this._interrupt(AggroBot.getTimeToRead(request));
         }
-        else this._resetInactiveTimeout();
+        
+        // Проверяем на спам/флуд
+        if (!this._responseQueue.some(queued => queued.isSpamResponse)) {
+            const {result, variables} = this._spamChecker.analyzeNext(request);
+            if (result) {
+                Object.assign(this._variables, variables);
+                this._processAndAddToQueue(this._getMessage(result), {
+                    readDelay: AggroBot.getTimeToRead(request),
+                    isSpamResponse: true
+                });
+            }
+        }
+        
+        if(!this._responseQueue[0]) this._resetInactiveTimeout();
 
     }
 
@@ -564,6 +591,9 @@ const AggroBot = class {
                 }
                 case "timedayofweek":
                     return ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"][new Date().getDay()];
+                default:
+                    if (typeof this._variables[name] === "string") return this._variables[name];
+                    else if (typeof this._variables[name] === "function") return this._variables[name].apply(this, args);
             }
 
             return "";
@@ -665,7 +695,7 @@ const AggroBot = class {
                 let replacement = match;
                 if (Math.random() < this._style.insideInsertionProbability) {
                     const word = this._getMessage("insert_inside");
-                    if (p1 != word && lastWord != word && AggroBot.Style.prepositionsOrConjunctions.indexOf(lastWord) == -1) {
+                    if (p1 != word && lastWord != word && AggroBot.Style.PREPOSITIONS_OR_CONJUNCTIONS.indexOf(lastWord) == -1) {
                         replacement = `${word} ${match}`;
                         changed = true;
                     }
@@ -894,6 +924,8 @@ AggroBot.QueuedResponse = class {
          * @type {RegExp}
          */
         this.pattern = null;
+        
+        this.isSpamResponse = false;
 
         this.calculateTypeDelay();
 
@@ -1550,14 +1582,164 @@ Object.assign(AggroBot.Style, {
     /**
      * Предлоги или союзы, после которых не может быть вставлено слово
      */
-    prepositionsOrConjunctions: [
+    PREPOSITIONS_OR_CONJUNCTIONS: [
         "без", "в", "вне", "во", "вроде", "возле", "внутрь", "внутри", "вокруг", "для", "до", "за", "из",
-        "к", "кроме", "ко", "между", "мимо", "на", "над", "надо", "о", "об", "обо", "около", "от",
-        "ото", "перед", "передо", "по", "под", "подо", "после", "при", "про", "против", "ради", "с", "среди",
-        "сзади", "снизу", "а", "даже", "если", "и", "или", "как", "когда", "но", "пока", "пусть", "тоже", "не", "ни"
+        "к", "кроме", "ко", "между", "мимо", "на", "над", "надо", "о", "об", "обо", "около", "от", "ото",
+        "перед", "передо", "по", "под", "подо", "после", "при", "про", "против", "ради", "с", "среди", "сзади",
+        "снизу", "у", "а", "даже", "если", "и", "или", "как", "когда", "но", "пока", "пусть", "тоже", "не", "ни"
     ]
 
 });
+
+AggroBot.SpamDetector = class {
+    
+    constructor() {
+        
+        this.state = AggroBot.SpamDetector.State.ANALYZING;
+        
+        this._buffer = [];
+        
+    }
+    
+    analyzeNext(message) {
+        
+        let result = null;
+        let variables = {};
+
+        this._buffer.push(message.toLowerCase());
+        if (this._buffer.length > AggroBot.SpamDetector.BUFFER_SIZE) this._buffer.shift();
+
+        if (this._buffer.length == AggroBot.SpamDetector.BUFFER_SIZE) (() => {
+
+            // Проверяем на одинаковые символы
+            let first = this._buffer[0];
+            if (/^(.)\1*$/.test(first) && this._buffer.join("").split("").every(ch => ch == first.charAt(0))) {
+                first = first.charAt(0);
+                const characterName = AggroBot.SpamDetector.CHARACTER_NAMES[first];
+                if (characterName) {
+                    result = "spam_character";
+                    variables["character"] = first;
+                    variables["charactername"] = variation => characterName[variation] || characterName["singular"];
+                    return;
+                }
+            }
+
+            const joined = this._buffer.join("");
+
+            // Проверяем на разные символы
+            if (/^[^а-яё0-9a-z]+$/.test(joined)) return result = "spam_single_symbol";
+
+            // Проверяем на цифры
+            if (/^[0-9]+$/.test(joined)) {
+                result = "spam_single_letter_or_digit";
+                variables["letterordigit"] = (letter, digit) => digit;
+                variables["gletterordigit"] = function(letterMale, digitMale, letterFemale, digitFemale) {
+                    return this._userProfile.gender === AggroBot.UserProfile.Gender.MALE ? digitMale : digitFemale;
+                };
+                return;
+            }
+
+            // Проверяем на одиночные буквы
+            if (this._buffer.every(str => /^[а-яёa-z]$/.test(str))) {
+                result = "spam_single_letter_or_digit";
+                variables["letterordigit"] = letter => letter;
+                variables["gletterordigit"] = function(letterMale, letterFemale) {
+                    return this._userProfile.gender === AggroBot.UserProfile.Gender.MALE ? letterMale : letterFemale;
+                };
+                return;
+            }
+
+            // Проверяем на повторы
+            const clean = str => str.replace(/[^а-яё0-9 ]/g, "");
+            first = clean(first);
+            if (this._buffer.every(str => clean(str) == first)) return result = "spam_repetition";
+
+            // Проверяем на бред
+            if (!this._buffer.every(str => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(str))) {
+                console.log("SPAM_REGULAR: ", JSON.stringify(this._buffer));
+                return result = "spam_regular";
+            }
+
+        })();
+
+        if (result && this.state === AggroBot.SpamDetector.State.DETECTED) {
+            result = "spam_aggressive";
+            variables = {};
+            this.state = AggroBot.SpamDetector.State.IGNORING;
+        }
+        else if (result) this.state = AggroBot.SpamDetector.State.DETECTED;
+        else this.state = AggroBot.SpamDetector.State.ANALYZING;
+
+        return {result, variables};
+        
+    }
+    
+};
+
+Object.assign(AggroBot.SpamDetector, {
+    
+    State: {
+        ANALYZING: 0,
+        DETECTED: 1,
+        IGNORING: 2
+    },
+    
+    BUFFER_SIZE: 3,
+    
+    CHARACTER_NAMES: {
+        "!": {singular: "воскл знак", plural: "воскл знаки", accusative: "воскл знак"},
+        "\"": {singular: "кавычка", plural: "кавычки", accusative: "кавычку"},
+        "#": {singular: "решетка", plural: "решетки", accusative: "решетку"},
+        "$": {singular: "доллар", plural: "доллары", accusative: "доллар"},
+        "%": {singular: "процент", plural: "проценты", accusative: "процент"},
+        "&": {singular: "энд", plural: "энды", accusative: "энд"},
+        "'": {singular: "кавычка", plural: "кавычки", accusative: "кавычку"},
+        "(": {singular: "скобка", plural: "скобки", accusative: "скобку"},
+        ")": {singular: "скобка", plural: "скобки", accusative: "скобку"},
+        "*": {singular: "звездочка", plural: "звездочки", accusative: "звездочку"},
+        "+": {singular: "плюс", plural: "плюсы", accusative: "плюс"},
+        ",": {singular: "запятая", plural: "запятые", accusative: "запятую"},
+        "-": {singular: "тире", plural: "тире", accusative: "тире"},
+        ".": {singular: "точка", plural: "точки", accusative: "точку"},
+        "/": {singular: "палочка", plural: "палочки", accusative: "палочку"},
+        ":": {singular: "двоеточие", plural: "двоеточия", accusative: "двоеточие"},
+        ";": {singular: "точка с запятой", plural: "точки с запятыми", accusative: "точку с запятой"},
+        "<": {singular: "меньше", plural: "меньше", accusative: "меньше"},
+        ">": {singular: "больше", plural: "больше", accusative: "больше"},
+        "=": {singular: "равно", plural: "равно", accusative: "равно"},
+        "?": {singular: "вопрос", plural: "вопросы", accusative: "вопрос"},
+        "@": {singular: "собака", plural: "собаки", accusative: "собаку"},
+        "[": {singular: "скобка", plural: "скобки", accusative: "скобку"},
+        "]": {singular: "скобка", plural: "скобки", accusative: "скобку"},
+        "\\": {singular: "палочка", plural: "палочки", accusative: "палочку"},
+        "^": {singular: "крышечка", plural: "крышечки", accusative: "крышечку"},
+        "_": {singular: "тире", plural: "тире", accusative: "тире"},
+        "`": {singular: "кавычка", plural: "кавычки", accusative: "кавычку"},
+        "{": {singular: "скобка", plural: "скобки", accusative: "скобку"},
+        "|": {singular: "палочка", plural: "палочки", accusative: "палочку"},
+        "}": {singular: "скобка", plural: "скобки", accusative: "скобку"},
+        "~": {singular: "волна", plural: "волны", accusative: "волну"},
+    },
+
+    COMMON_WORDS: [
+        "и", "в", "не", "на", "я", "был", "была", "он", "с", "что", "а", "по", "это", "она", "этот", "к", "но", "они",
+        "мы", "как", "из", "у", "то", "за", "свой", "что", "весь", "год", "от", "так", "о", "для", "ты", "же", "все",
+        "тот", "мочь", "вы", "человек", "такой", "его", "только", "или", "еще", "бы", "себя", "один", "как", "уже",
+        "до", "время", "если", "сам", "когда", "вот", "наш", "мой", "при", "дело", "жизнь", "кто", "очень",
+        "два", "день", "ее", "рука", "даже", "во", "со", "раз", "где", "там", "под", "можно", "ну", "после", "их",
+        "без", "потом", "надо", "ли", "идти", "должен", "место", "ничто", "то", "сейчас",
+        "тут", "лицо", "друг", "нет", "теперь", "ни", "да"
+    ],
+
+    COMMON_LETTER_COMBINATIONS: [
+        "ой", "ска", "чка", "ай", "ть", "сто", "чик", "щик", "ала", "зна", "ста", "жи", "ный", "рый", "вый", "гов",
+        "дый", "нна", "енн", "ян", "бы", "что", "име", "ша", "шка", "нка", "ние", "ия", "ого", "ому", "ами", "ыми",
+        "ему", "ах", "ях", "вш", "ющ", "ущ", "ащ", "ящ", "ых", "ым"
+    ]
+    
+});
+
+AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP = new RegExp(`([^а-яё]|^)(${AggroBot.SpamDetector.COMMON_WORDS.join("|")})([^а-яё]|$)|(${AggroBot.SpamDetector.COMMON_LETTER_COMBINATIONS.join("|")})`);
 
 VPP.Chat.prototype.aggrobot = (command, ...args) => {
 
