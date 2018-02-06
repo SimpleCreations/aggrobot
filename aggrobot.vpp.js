@@ -212,7 +212,14 @@ const AggroBot = class {
          * @type {AggroBot.SpamDetector}
          * @private
          */
-        this._spamChecker = new AggroBot.SpamDetector();
+        this._spamDetector = new AggroBot.SpamDetector();
+
+        /**
+         * Флаг установлен, если бот игнорирует запросы о подготовке ответа
+         * @type {boolean}
+         * @private
+         */
+        this._ignoringPrepareRequests = false;
 
     }
 
@@ -280,7 +287,7 @@ const AggroBot = class {
         
         // Проверяем на спам/флуд
         if (!this._responseQueue.some(queued => queued.isSpamResponse)) {
-            const {result, variables} = this._spamChecker.analyzeNext(request);
+            const {result, variables} = this._spamDetector.analyzeNext(request);
             if (result) {
                 Object.assign(this._variables, variables);
                 this._processAndAddToQueue(this._getMessage(result), {
@@ -288,6 +295,7 @@ const AggroBot = class {
                     isSpamResponse: true
                 });
             }
+            else this._ignoringPrepareRequests = this._spamDetector.state === AggroBot.SpamDetector.State.IGNORING;
         }
         
         if(!this._responseQueue[0]) this._resetInactiveTimeout();
@@ -299,6 +307,8 @@ const AggroBot = class {
      * @param {string} request Сообщение от собеседника
      */
     prepareResponse(request = "") {
+
+        if (this._ignoringPrepareRequests) return;
 
         if (!this._greeted) {
             this._greeted = true;
@@ -1611,6 +1621,15 @@ AggroBot.SpamDetector = class {
 
         if (this._buffer.length == AggroBot.SpamDetector.BUFFER_SIZE) (() => {
 
+            // Проверяем на фразу о прекращении флуда
+            if (this.state === AggroBot.SpamDetector.State.IGNORING &&
+                /надоело|заебала?с|больше не буду/i.test(message)) return;
+
+            // Если две последний фразы — не флуд, прекращаем игнорировать
+            if (this.state === AggroBot.SpamDetector.State.IGNORING &&
+                this._buffer[this._buffer.length - 2] != this._buffer[this._buffer.length - 1] &&
+                this._buffer.slice(-2).some(str => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(str))) return;
+
             // Проверяем на одинаковые символы
             let first = this._buffer[0];
             if (/^(.)\1*$/.test(first) && this._buffer.join("").split("").every(ch => ch == first.charAt(0))) {
@@ -1662,17 +1681,30 @@ AggroBot.SpamDetector = class {
 
         })();
 
-        if (result && this.state === AggroBot.SpamDetector.State.DETECTED) {
-            result = "spam_aggressive";
-            variables = {};
-            this.state = AggroBot.SpamDetector.State.IGNORING;
+        if (result) switch (this.state) {
+            case AggroBot.SpamDetector.State.ANALYZING:
+                this.state = AggroBot.SpamDetector.State.DETECTED_FIRST;
+                break;
+            case AggroBot.SpamDetector.State.DETECTED_FIRST:
+                result = "spam_aggressive";
+                variables = {};
+                this.state = AggroBot.SpamDetector.State.DETECTED_SECOND;
+                break;
+            case AggroBot.SpamDetector.State.DETECTED_SECOND:
+                result = "spam_ignoring";
+                variables = {};
+                this.state = AggroBot.SpamDetector.State.IGNORING;
+                break;
+            case AggroBot.SpamDetector.State.IGNORING:
+                break;
         }
-        else if (result) this.state = AggroBot.SpamDetector.State.DETECTED;
         else this.state = AggroBot.SpamDetector.State.ANALYZING;
 
         return {result, variables};
         
     }
+
+
     
 };
 
@@ -1680,8 +1712,9 @@ Object.assign(AggroBot.SpamDetector, {
     
     State: {
         ANALYZING: 0,
-        DETECTED: 1,
-        IGNORING: 2
+        DETECTED_FIRST: 1,
+        DETECTED_SECOND: 2,
+        IGNORING: 3
     },
     
     BUFFER_SIZE: 3,
