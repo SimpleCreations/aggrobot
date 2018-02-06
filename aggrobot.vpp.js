@@ -1628,7 +1628,7 @@ AggroBot.SpamDetector = class {
             // Если две последний фразы — не флуд, прекращаем игнорировать
             if (this.state === AggroBot.SpamDetector.State.IGNORING &&
                 this._buffer[this._buffer.length - 2] != this._buffer[this._buffer.length - 1] &&
-                this._buffer.slice(-2).some(str => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(str))) return;
+                this._buffer.slice(-2).every(str => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(str))) return;
 
             // Проверяем на одинаковые символы
             let first = this._buffer[0];
@@ -1696,6 +1696,7 @@ AggroBot.SpamDetector = class {
                 this.state = AggroBot.SpamDetector.State.IGNORING;
                 break;
             case AggroBot.SpamDetector.State.IGNORING:
+                result = null;
                 break;
         }
         else this.state = AggroBot.SpamDetector.State.ANALYZING;
