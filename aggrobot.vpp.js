@@ -1619,7 +1619,7 @@ AggroBot.SpamDetector = class {
         this._buffer.push(message.toLowerCase());
         if (this._buffer.length > AggroBot.SpamDetector.BUFFER_SIZE) this._buffer.shift();
 
-        if (this._buffer.length == AggroBot.SpamDetector.BUFFER_SIZE) (() => {
+        if (this._buffer.length >= AggroBot.SpamDetector.MESSAGES_TO_CHECK_SIMPLE) (() => {
 
             // Проверяем на фразу о прекращении флуда
             if (this.state === AggroBot.SpamDetector.State.IGNORING &&
@@ -1630,9 +1630,12 @@ AggroBot.SpamDetector = class {
                 this._buffer[this._buffer.length - 2] != this._buffer[this._buffer.length - 1] &&
                 this._buffer.slice(-2).every(str => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(str))) return;
 
+            const slice = this._buffer.slice(-AggroBot.SpamDetector.MESSAGES_TO_CHECK_SIMPLE);
+            const joined = slice.join("");
+
             // Проверяем на одинаковые символы
-            let first = this._buffer[0];
-            if (/^(.)\1*$/.test(first) && this._buffer.join("").split("").every(ch => ch == first.charAt(0))) {
+            let first = slice[0];
+            if (/^(.)\1*$/.test(first) && joined.split("").every(ch => ch == first.charAt(0))) {
                 first = first.charAt(0);
                 const characterName = AggroBot.SpamDetector.CHARACTER_NAMES[first];
                 if (characterName) {
@@ -1642,8 +1645,6 @@ AggroBot.SpamDetector = class {
                     return;
                 }
             }
-
-            const joined = this._buffer.join("");
 
             // Проверяем на разные символы
             if (/^[^а-яё0-9a-z]+$/.test(joined)) return result = "spam_single_symbol";
@@ -1659,7 +1660,7 @@ AggroBot.SpamDetector = class {
             }
 
             // Проверяем на одиночные буквы
-            if (this._buffer.every(str => /^[а-яёa-z]$/.test(str))) {
+            if (slice.every(str => /^[а-яёa-z]$/.test(str))) {
                 result = "spam_single_letter_or_digit";
                 variables["letterordigit"] = letter => letter;
                 variables["gletterordigit"] = function(letterMale, letterFemale) {
@@ -1671,12 +1672,15 @@ AggroBot.SpamDetector = class {
             // Проверяем на повторы
             const clean = str => str.replace(/[^а-яё0-9 ]/g, "");
             first = clean(first);
-            if (this._buffer.every(str => clean(str) == first)) return result = "spam_repetition";
+            if (slice.every(str => clean(str) == first)) return result = "spam_repetition";
 
             // Проверяем на бред
-            if (!this._buffer.some(str => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(str))) {
-                console.log("SPAM_REGULAR: ", JSON.stringify(this._buffer));
-                return result = "spam_regular";
+            if (this._buffer.length >= AggroBot.SpamDetector.MESSAGES_TO_CHECK_ADVANCED) {
+                const slice = this._buffer.slice(-AggroBot.SpamDetector.MESSAGES_TO_CHECK_ADVANCED);
+                if (!slice.some(str => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(str))) {
+                    console.log("SPAM_REGULAR: ", JSON.stringify(slice));
+                    return result = "spam_regular";
+                }
             }
 
         })();
@@ -1716,8 +1720,10 @@ Object.assign(AggroBot.SpamDetector, {
         IGNORING: 3
     },
     
-    BUFFER_SIZE: 3,
-    
+    BUFFER_SIZE: 4,
+    MESSAGES_TO_CHECK_SIMPLE: 3,
+    MESSAGES_TO_CHECK_ADVANCED: 4,
+
     CHARACTER_NAMES: {
         "!": {singular: "воскл знак", plural: "воскл знаки", accusative: "воскл знак"},
         "\"": {singular: "кавычка", plural: "кавычки", accusative: "кавычку"},
