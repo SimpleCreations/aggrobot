@@ -98,9 +98,29 @@ const enableScript = () => {
 
         chat.addEventListener(VPP.Chat.Event.MESSAGE_RECEIVED, "aggrobot", (type, content) => {
 
-            const text = type === VPP.Chat.MessageType.TEXT ? content : "";
-            aggroBot.receiveMessage(text);
-            aggroBot.prepareResponse(text);
+            let request;
+            switch (type) {
+                case VPP.Chat.MessageType.TEXT:
+                    request = new AggroBot.Request(AggroBot.Request.Type.TEXT);
+                    request.text = content;
+                    break;
+                case VPP.Chat.MessageType.IMAGE:
+                    request = new AggroBot.Request(AggroBot.Request.Type.PHOTO);
+                    request.photoURL = content;
+                    break;
+                case VPP.Chat.MessageType.STICKER:
+                    request = new AggroBot.Request(AggroBot.Request.Type.STICKER);
+                    const groupId = content.match(/\/stickers\/(\d+)\//i)[1];
+                    switch (groupId) {
+                        case 4: request.stickerGroupName = "pony"; break;
+                        case 6: request.stickerGroupName = "cat"; break;
+                        case 8: request.stickerGroupName = "nichosi"; break;
+                        case 9: request.stickerGroupName = "seagull"; break;
+                    }
+                    break;
+            }
+            aggroBot.receiveMessage(request);
+            aggroBot.prepareResponse(request);
 
         });
 
@@ -251,12 +271,12 @@ const AggroBot = class {
 
     /**
      * Уведомляет бота о том, что ему отослали сообщение
-     * @param {string} request Сообщение от собеседника
+     * @param {AggroBot.Request} request Сообщение от собеседника
      */
     receiveMessage(request) {
 
         // Пытаемся определить пол
-        this._determineGender(request);
+        if (request.type === AggroBot.Request.Type.TEXT) this._determineGender(request.text);
 
         // Полученное сообщение считается активностью, поэтому сбрасываем счётчик
         this._inactivityCounter = 0;
@@ -304,9 +324,9 @@ const AggroBot = class {
 
     /**
      * Готовит и откладывает ответ собеседнику
-     * @param {string} request Сообщение от собеседника
+     * @param {AggroBot.Request} request Сообщение от собеседника
      */
-    prepareResponse(request = "") {
+    prepareResponse(request = null) {
 
         if (this._ignoringPrepareRequests) return;
 
@@ -317,25 +337,55 @@ const AggroBot = class {
             });
         }
         else {
+
             // Проверяем, занят ли бот
             const ready = !this._responseQueue[0] || this._responseQueue.every(queued => !queued.blockQueue);
-            // Пытаемся найти ответ по регулярному выражению
-            const {message, pattern} = this._getAnswer(request);
-            if (message != null) this._processAndAddToQueue(message, {
-                readDelay: AggroBot.getTimeToRead(request),
-                pattern: pattern
-            });
+            let added = false;
+
+            // Пытаемся найти ответ по регулярному выражению или на особые типы контента
+            if (request != null) switch (request.type) {
+                case AggroBot.Request.Type.TEXT:
+                    const {message, pattern} = this._getAnswer(request.text);
+                    if (message != null) this._processAndAddToQueue(message, {
+                        readDelay: AggroBot.getTimeToRead(request),
+                        pattern: pattern
+                    }) && (added = true);
+                    break;
+                case AggroBot.Request.Type.PHOTO:
+                    if (!this._responseQueue.some(queued => queued.pattern == "photo")) this._processAndAddToQueue("photo", {
+                        readDelay: AggroBot.getTimeToRead(request),
+                        pattern: "photo"
+                    }) && (added = true);
+                    break;
+                case AggroBot.Request.Type.STICKER:
+                    const databaseKey = `sticker_${request.stickerGroupName}`;
+                    if (this._database.has(databaseKey) && !this._responseQueue.some(queued => queued.pattern == "sticker")) {
+                        this._processAndAddToQueue(databaseKey, {
+                            readDelay: AggroBot.getTimeToRead(request),
+                            pattern: "sticker"
+                        });
+                        added = true;
+                    }
+                    break;
+            }
+
             // Добавляем в очередь новый первичный ответ, если бот не занят
-            else if (ready) this._processAndAddToQueue(this._getMessage("primary"), {
-                readDelay: AggroBot.getTimeToRead(request)
-            });
-            if (message != null || ready) while (Math.random() < AggroBot.PROBABILITY_SECONDARY) {
+            else if (!added && ready) {
+                this._processAndAddToQueue(this._getMessage("primary"), {
+                    readDelay: AggroBot.getTimeToRead(request)
+                });
+                added = true;
+            }
+
+            // Добавляем вторичные ответы
+            if (added) while (Math.random() < AggroBot.PROBABILITY_SECONDARY) {
                 this._processAndAddToQueue(this._getMessage("secondary"), {
                     readDelay: AggroBot.TIME_ADDITIONAL_READ_DELAY,
                     interruptOnTyping: false,
                     discardOnMessage: true
                 });
             }
+
         }
 
     }
@@ -424,7 +474,7 @@ const AggroBot = class {
 
     /**
      * Запускает таймер, который, если во время его активности собеседник не был активен, увеличивает счётчик тиков
-     * неактивности.
+     * неактивности по его истечении.
      * При каждом прибавлении бот выполняет действия, направленные на привлечение внимания собеседника.
      * Если собеседник неактивен несколько тиков подряд, соединение разрывается.
      * @private
@@ -517,7 +567,7 @@ const AggroBot = class {
     }
 
     /**
-     * Возвращает случаёное необработанное сообщение из базы сообщений по ключу
+     * Возвращает случайное необработанное сообщение из базы сообщений по ключу
      * @param {string} databaseKey
      * @returns {string}
      * @private
@@ -809,12 +859,20 @@ const AggroBot = class {
 Object.assign(AggroBot, {
 
     /**
-     * Возвращает время, необходимое для чтения сообщения, мс
-     * @param {string} message
+     * Возвращает время, необходимое для чтения запроса, мс
+     * @param {AggroBot.Request} request
      * @returns {number}
      */
-    getTimeToRead(message) {
-        return 850 + 350 * (message + " ").match(/\s/g).length;
+    getTimeToRead(request) {
+        if (request == null) return 0;
+        switch (request.type) {
+            case AggroBot.Request.Type.TEXT:
+                return 850 + 350 * (request.text + " ").match(/\s/g).length;
+            case AggroBot.Request.Type.PHOTO:
+                return 3500;
+            case AggroBot.Request.Type.STICKER:
+                return 2200;
+        }
     },
 
     /**
@@ -882,6 +940,51 @@ Object.assign(AggroBot, {
 });
 
 /**
+ * Представляет запрос боту
+ * @class
+ */
+AggroBot.Request = class {
+
+    /**
+     * @constructor
+     * @param {number} type Тип контента запроса
+     */
+    constructor(type) {
+
+        /**
+         * Тип контента запроса
+         * @type {number}
+         */
+        this.type = type;
+
+        switch (type) {
+            case AggroBot.Request.Type.TEXT:
+                this.text = "";
+                break;
+            case AggroBot.Request.Type.PHOTO:
+                this.photoURL = null;
+                break;
+            case AggroBot.Request.Type.STICKER:
+                this.stickerGroupName = null;
+                break;
+        }
+
+    }
+
+};
+
+/**
+ * Тип контента запроса
+ * @enum
+ * @readonly
+ */
+AggroBot.Request.Type = Object.freeze({
+    TEXT: 0,
+    PHOTO: 1,
+    STICKER: 2
+});
+
+/**
  * Представляет отложенный в очередь ответ бота
  * @class
  */
@@ -931,7 +1034,7 @@ AggroBot.QueuedResponse = class {
 
         /**
          * Шаблон, по которому найден ответ
-         * @type {RegExp}
+         * @type {*}
          */
         this.pattern = null;
         
@@ -978,6 +1081,17 @@ AggroBot.Database = class {
 
         // noinspection JSCheckFunctionSignatures
         Object.keys(this).forEach(key => key !== "answers" && this[key].reset());
+
+    }
+
+    /**
+     * Определяет, есть ли в базе сообщений множество ответов с данным ключом
+     * @param {string} key
+     * @returns {boolean}
+     */
+    has(key) {
+
+        return this[key] instanceof AggroBot.ResponseSet;
 
     }
 
@@ -1601,89 +1715,126 @@ Object.assign(AggroBot.Style, {
 
 });
 
+/**
+ * Представляет детектор флуда в последовательности сообщений
+ * @class
+ */
 AggroBot.SpamDetector = class {
-    
+
+    /**
+     * @constructor
+     */
     constructor() {
-        
+
+        /**
+         * Состояние детектора
+         * @type {number}
+         */
         this.state = AggroBot.SpamDetector.State.ANALYZING;
-        
+
+        /**
+         * Буфер входящих сообщений
+         * @type {Array<AggroBot.Request>}
+         * @private
+         */
         this._buffer = [];
         
     }
-    
-    analyzeNext(message) {
+
+    /**
+     * Анализирует очередное входящее сообщение
+     * @param {AggroBot.Request} request
+     * @returns {{result: string | null, variables: object}}
+     */
+    analyzeNext(request) {
         
         let result = null;
         let variables = {};
 
-        this._buffer.push(message.toLowerCase());
+        this._buffer.push(request);
         if (this._buffer.length > AggroBot.SpamDetector.BUFFER_SIZE) this._buffer.shift();
 
         if (this._buffer.length >= AggroBot.SpamDetector.MESSAGES_TO_CHECK_SIMPLE) (() => {
 
             // Проверяем на фразу о прекращении флуда
             if (this.state === AggroBot.SpamDetector.State.IGNORING &&
-                /надоело|заебала?с|больше не буду/i.test(message)) return;
+                    request.type === AggroBot.Request.Type.TEXT &&
+                    /надоело|заебала?с|больше не буду/i.test(request.text)) return;
 
-            // Если две последний фразы — не флуд, прекращаем игнорировать
+            // Если две последние фразы — не флуд, прекращаем игнорировать
             if (this.state === AggroBot.SpamDetector.State.IGNORING &&
-                this._buffer[this._buffer.length - 2] != this._buffer[this._buffer.length - 1] &&
-                this._buffer.slice(-2).every(str => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(str))) return;
+                this._buffer[this._buffer.length - 2].type === AggroBot.Request.Type.TEXT &&
+                this._buffer[this._buffer.length - 1].type === AggroBot.Request.Type.TEXT &&
+                this._buffer.slice(-2).every(request => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(request.text))) return;
 
-            const slice = this._buffer.slice(-AggroBot.SpamDetector.MESSAGES_TO_CHECK_SIMPLE);
-            const joined = slice.join("");
+            let slice = this._buffer.slice(-AggroBot.SpamDetector.MESSAGES_TO_CHECK_SIMPLE);
+            if (slice.every(request => request.type === AggroBot.Request.Type.TEXT)) {
 
-            // Проверяем на одинаковые символы
-            let first = slice[0];
-            if (/^(.)\1*$/.test(first) && joined.split("").every(ch => ch == first.charAt(0))) {
-                first = first.charAt(0);
-                const characterName = AggroBot.SpamDetector.CHARACTER_NAMES[first];
-                if (characterName) {
-                    result = "spam_character";
-                    variables["character"] = first;
-                    variables["charactername"] = variation => characterName[variation] || characterName["singular"];
+                slice = slice.map(request => request.text);
+                const joined = slice.join("");
+
+                // Проверяем на одинаковые символы
+                let first = slice[0];
+                if (/^(.)\1*$/.test(first) && joined.split("").every(ch => ch == first.charAt(0))) {
+                    first = first.charAt(0);
+                    const characterName = AggroBot.SpamDetector.CHARACTER_NAMES[first];
+                    if (characterName) {
+                        result = "spam_character";
+                        variables["character"] = first;
+                        variables["charactername"] = variation => characterName[variation] || characterName["singular"];
+                        return;
+                    }
+                }
+
+                // Проверяем на разные символы
+                if (/^[^а-яё0-9a-z]+$/.test(joined)) return result = "spam_single_symbol";
+
+                // Проверяем на цифры
+                if (/^[0-9]+$/.test(joined)) {
+                    result = "spam_single_letter_or_digit";
+                    variables["letterordigit"] = (letter, digit) => digit;
+                    variables["gletterordigit"] = function(letterMale, digitMale, letterFemale, digitFemale) {
+                        return this._userProfile.gender === AggroBot.UserProfile.Gender.MALE ? digitMale : digitFemale;
+                    };
                     return;
                 }
+
+                // Проверяем на одиночные буквы
+                if (slice.every(str => /^[а-яёa-z]$/.test(str))) {
+                    result = "spam_single_letter_or_digit";
+                    variables["letterordigit"] = letter => letter;
+                    variables["gletterordigit"] = function(letterMale, letterFemale) {
+                        return this._userProfile.gender === AggroBot.UserProfile.Gender.MALE ? letterMale : letterFemale;
+                    };
+                    return;
+                }
+
+                // Проверяем на повторы
+                const clean = str => str.replace(/[^а-яё0-9 ]/g, "");
+                first = clean(first);
+                if (slice.every(str => clean(str) == first)) return result = "spam_repetition";
+
             }
-
-            // Проверяем на разные символы
-            if (/^[^а-яё0-9a-z]+$/.test(joined)) return result = "spam_single_symbol";
-
-            // Проверяем на цифры
-            if (/^[0-9]+$/.test(joined)) {
-                result = "spam_single_letter_or_digit";
-                variables["letterordigit"] = (letter, digit) => digit;
-                variables["gletterordigit"] = function(letterMale, digitMale, letterFemale, digitFemale) {
-                    return this._userProfile.gender === AggroBot.UserProfile.Gender.MALE ? digitMale : digitFemale;
-                };
-                return;
-            }
-
-            // Проверяем на одиночные буквы
-            if (slice.every(str => /^[а-яёa-z]$/.test(str))) {
-                result = "spam_single_letter_or_digit";
-                variables["letterordigit"] = letter => letter;
-                variables["gletterordigit"] = function(letterMale, letterFemale) {
-                    return this._userProfile.gender === AggroBot.UserProfile.Gender.MALE ? letterMale : letterFemale;
-                };
-                return;
-            }
-
-            // Проверяем на повторы
-            const clean = str => str.replace(/[^а-яё0-9 ]/g, "");
-            first = clean(first);
-            if (slice.every(str => clean(str) == first)) return result = "spam_repetition";
 
             // Проверяем на бред
             if (this._buffer.length >= AggroBot.SpamDetector.MESSAGES_TO_CHECK_ADVANCED) {
                 const slice = this._buffer.slice(-AggroBot.SpamDetector.MESSAGES_TO_CHECK_ADVANCED);
-                if (!slice.some(str => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(str))) {
+                if (slice.every(request => request.type === AggroBot.Request.Type.TEXT) &&
+                        !slice.some(request => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(request.text))) {
                     console.log("SPAM_REGULAR: ", JSON.stringify(slice));
                     return result = "spam_regular";
                 }
             }
 
         })();
+
+        // Проверяем на фото и стикеры
+        if (!result && this._buffer.length >= AggroBot.SpamDetector.PHOTOS_CONSIDERED_SPAM &&
+                this._buffer.slice(-AggroBot.SpamDetector.PHOTOS_CONSIDERED_SPAM).every(request =>
+                    request.type === AggroBot.Request.Type.PHOTO)) result = "spam_photo";
+        if (!result && this._buffer.length >= AggroBot.SpamDetector.STICKERS_CONSIDERED_SPAM &&
+                this._buffer.slice(-AggroBot.SpamDetector.STICKERS_CONSIDERED_SPAM).every(request =>
+                    request.type === AggroBot.Request.Type.STICKER)) result = "spam_sticker";
 
         if (result) switch (this.state) {
             case AggroBot.SpamDetector.State.ANALYZING:
@@ -1723,6 +1874,8 @@ Object.assign(AggroBot.SpamDetector, {
     BUFFER_SIZE: 4,
     MESSAGES_TO_CHECK_SIMPLE: 3,
     MESSAGES_TO_CHECK_ADVANCED: 4,
+    STICKERS_CONSIDERED_SPAM: 2,
+    PHOTOS_CONSIDERED_SPAM: 3,
 
     CHARACTER_NAMES: {
         "!": {singular: "воскл знак", plural: "воскл знаки", accusative: "воскл знак"},
