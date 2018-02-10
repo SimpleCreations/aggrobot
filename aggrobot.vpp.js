@@ -110,7 +110,7 @@ const enableScript = () => {
                     break;
                 case VPP.Chat.MessageType.STICKER:
                     request = new AggroBot.Request(AggroBot.Request.Type.STICKER);
-                    const groupId = content.match(/\/stickers\/(\d+)\//i)[1];
+                    const groupId = +content.match(/\/stickers\/(\d+)\//i)[1];
                     switch (groupId) {
                         case 4: request.stickerGroupName = "pony"; break;
                         case 6: request.stickerGroupName = "cat"; break;
@@ -235,6 +235,13 @@ const AggroBot = class {
         this._spamDetector = new AggroBot.SpamDetector();
 
         /**
+         * Последний запрос, который посчитался флудом/спамом
+         * @type {AggroBot.Request}
+         * @private
+         */
+        this._spamRequest = null;
+
+        /**
          * Флаг установлен, если бот игнорирует запросы о подготовке ответа
          * @type {boolean}
          * @private
@@ -287,13 +294,7 @@ const AggroBot = class {
         // Смотрим, есть ли в очереди ответы, которые должны быть удалены из очереди во время получения сообщения
         let queueUpdated = false;
         if (this._responseQueue[0] && this._responseQueue[0].discardOnMessage) {
-            clearTimeout(this._readTimeout);
-            clearTimeout(this._typeTimeout);
-            clearTimeout(this._interruptedTimeout);
-            this._readTimeout = null;
-            this._typeTimeout = null;
-            this._interruptedTimeout = null;
-            this._resetInactiveTimeout();
+            this._removeNextQueuedResponse();
             queueUpdated = true;
         }
         this._responseQueue = this._responseQueue.filter(queued => !queued.discardOnMessage);
@@ -306,16 +307,25 @@ const AggroBot = class {
         }
         
         // Проверяем на спам/флуд
-        if (!this._responseQueue.some(queued => queued.isSpamResponse)) {
-            const {result, variables} = this._spamDetector.analyzeNext(request);
-            if (result) {
+        const alreadyResponding = this._responseQueue.some(queued => queued.isSpamResponse);
+        const {result, variables} = this._spamDetector.analyzeNext(request, alreadyResponding);
+        if (result) {
+            this._spamRequest = request;
+            if (!alreadyResponding) {
                 Object.assign(this._variables, variables);
                 this._processAndAddToQueue(this._getMessage(result), {
                     readDelay: AggroBot.getTimeToRead(request),
                     isSpamResponse: true
                 });
             }
-            else this._ignoringPrepareRequests = this._spamDetector.state === AggroBot.SpamDetector.State.IGNORING;
+        }
+        else {
+            this._spamRequest = null;
+            this._ignoringPrepareRequests = this._spamDetector.state === AggroBot.SpamDetector.State.IGNORING;
+            if (!this._ignoringPrepareRequests && this._responseQueue[0] && this._responseQueue[0].isSpamResponse) {
+                this._removeNextQueuedResponse();
+                this._setQueueUpdated();
+            }
         }
         
         if(!this._responseQueue[0]) this._resetInactiveTimeout();
@@ -328,64 +338,63 @@ const AggroBot = class {
      */
     prepareResponse(request = null) {
 
-        if (this._ignoringPrepareRequests) return;
+        if (this._ignoringPrepareRequests || request != null && this._spamRequest == request) return;
 
+        // Отправляем приветствие
         if (!this._greeted) {
             this._greeted = true;
             this._processAndAddToQueue(this._getMessage("greetings"), {
                 discardOnMessage: true
             });
+            return;
         }
-        else {
 
-            // Проверяем, занят ли бот
-            const ready = !this._responseQueue[0] || this._responseQueue.every(queued => !queued.blockQueue);
-            let added = false;
+        // Проверяем, занят ли бот
+        const ready = !this._responseQueue[0] || this._responseQueue.every(queued => !queued.blockQueue);
+        let added = false;
 
-            // Пытаемся найти ответ по регулярному выражению или на особые типы контента
-            if (request != null) switch (request.type) {
-                case AggroBot.Request.Type.TEXT:
-                    const {message, pattern} = this._getAnswer(request.text);
-                    if (message != null) this._processAndAddToQueue(message, {
+        // Пытаемся найти ответ по регулярному выражению или на особые типы контента
+        if (request != null) switch (request.type) {
+            case AggroBot.Request.Type.TEXT:
+                const {message, pattern} = this._getAnswer(request.text);
+                if (message != null) this._processAndAddToQueue(message, {
+                    readDelay: AggroBot.getTimeToRead(request),
+                    pattern: pattern
+                }) && (added = true);
+                break;
+            case AggroBot.Request.Type.PHOTO:
+                if (!this._responseQueue.some(queued => queued.pattern == "photo")) this._processAndAddToQueue(this._getMessage("photo"), {
+                    readDelay: AggroBot.getTimeToRead(request),
+                    pattern: "photo"
+                }) && (added = true);
+                break;
+            case AggroBot.Request.Type.STICKER:
+                const databaseKey = `sticker_${request.stickerGroupName}`;
+                if (this._database.has(databaseKey) && !this._responseQueue.some(queued => queued.pattern == "sticker")) {
+                    this._processAndAddToQueue(this._getMessage(databaseKey), {
                         readDelay: AggroBot.getTimeToRead(request),
-                        pattern: pattern
-                    }) && (added = true);
-                    break;
-                case AggroBot.Request.Type.PHOTO:
-                    if (!this._responseQueue.some(queued => queued.pattern == "photo")) this._processAndAddToQueue("photo", {
-                        readDelay: AggroBot.getTimeToRead(request),
-                        pattern: "photo"
-                    }) && (added = true);
-                    break;
-                case AggroBot.Request.Type.STICKER:
-                    const databaseKey = `sticker_${request.stickerGroupName}`;
-                    if (this._database.has(databaseKey) && !this._responseQueue.some(queued => queued.pattern == "sticker")) {
-                        this._processAndAddToQueue(databaseKey, {
-                            readDelay: AggroBot.getTimeToRead(request),
-                            pattern: "sticker"
-                        });
-                        added = true;
-                    }
-                    break;
-            }
+                        pattern: "sticker"
+                    });
+                    added = true;
+                }
+                break;
+        }
 
-            // Добавляем в очередь новый первичный ответ, если бот не занят
-            else if (!added && ready) {
-                this._processAndAddToQueue(this._getMessage("primary"), {
-                    readDelay: AggroBot.getTimeToRead(request)
-                });
-                added = true;
-            }
+        // Добавляем в очередь новый первичный ответ, если бот не занят
+        if (!added && ready) {
+            this._processAndAddToQueue(this._getMessage("primary"), {
+                readDelay: AggroBot.getTimeToRead(request)
+            });
+            added = true;
+        }
 
-            // Добавляем вторичные ответы
-            if (added) while (Math.random() < AggroBot.PROBABILITY_SECONDARY) {
-                this._processAndAddToQueue(this._getMessage("secondary"), {
-                    readDelay: AggroBot.TIME_ADDITIONAL_READ_DELAY,
-                    interruptOnTyping: false,
-                    discardOnMessage: true
-                });
-            }
-
+        // Добавляем вторичные ответы
+        if (added) while (Math.random() < AggroBot.PROBABILITY_SECONDARY) {
+            this._processAndAddToQueue(this._getMessage("secondary"), {
+                readDelay: AggroBot.TIME_ADDITIONAL_READ_DELAY,
+                interruptOnTyping: false,
+                discardOnMessage: true
+            });
         }
 
     }
@@ -514,6 +523,23 @@ const AggroBot = class {
 
         this._responseQueue.push(queued);
         this._setQueueUpdated();
+
+    }
+
+    /**
+     * Отменяет подготовку к отправке следующего ответа в очереди
+     * @private
+     */
+    _removeNextQueuedResponse() {
+
+        this._responseQueue.shift();
+        clearTimeout(this._readTimeout);
+        clearTimeout(this._typeTimeout);
+        clearTimeout(this._interruptedTimeout);
+        this._readTimeout = null;
+        this._typeTimeout = null;
+        this._interruptedTimeout = null;
+        this._resetInactiveTimeout();
 
     }
 
@@ -1744,9 +1770,10 @@ AggroBot.SpamDetector = class {
     /**
      * Анализирует очередное входящее сообщение
      * @param {AggroBot.Request} request
+     * @param {boolean} noStateChange
      * @returns {{result: string | null, variables: object}}
      */
-    analyzeNext(request) {
+    analyzeNext(request, noStateChange = false) {
         
         let result = null;
         let variables = {};
@@ -1836,25 +1863,27 @@ AggroBot.SpamDetector = class {
                 this._buffer.slice(-AggroBot.SpamDetector.STICKERS_CONSIDERED_SPAM).every(request =>
                     request.type === AggroBot.Request.Type.STICKER)) result = "spam_sticker";
 
-        if (result) switch (this.state) {
-            case AggroBot.SpamDetector.State.ANALYZING:
-                this.state = AggroBot.SpamDetector.State.DETECTED_FIRST;
-                break;
-            case AggroBot.SpamDetector.State.DETECTED_FIRST:
-                result = "spam_aggressive";
-                variables = {};
-                this.state = AggroBot.SpamDetector.State.DETECTED_SECOND;
-                break;
-            case AggroBot.SpamDetector.State.DETECTED_SECOND:
-                result = "spam_ignoring";
-                variables = {};
-                this.state = AggroBot.SpamDetector.State.IGNORING;
-                break;
-            case AggroBot.SpamDetector.State.IGNORING:
-                result = null;
-                break;
+        if (!noStateChange) {
+            if (result) switch (this.state) {
+                case AggroBot.SpamDetector.State.ANALYZING:
+                    this.state = AggroBot.SpamDetector.State.DETECTED_FIRST;
+                    break;
+                case AggroBot.SpamDetector.State.DETECTED_FIRST:
+                    result = "spam_aggressive";
+                    variables = {};
+                    this.state = AggroBot.SpamDetector.State.DETECTED_SECOND;
+                    break;
+                case AggroBot.SpamDetector.State.DETECTED_SECOND:
+                    result = "spam_ignoring";
+                    variables = {};
+                    this.state = AggroBot.SpamDetector.State.IGNORING;
+                    break;
+                case AggroBot.SpamDetector.State.IGNORING:
+                    result = null;
+                    break;
+            }
+            else this.state = AggroBot.SpamDetector.State.ANALYZING;
         }
-        else this.state = AggroBot.SpamDetector.State.ANALYZING;
 
         return {result, variables};
         
