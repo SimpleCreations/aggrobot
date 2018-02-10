@@ -110,7 +110,7 @@ const enableScript = () => {
                     break;
                 case VPP.Chat.MessageType.STICKER:
                     request = new AggroBot.Request(AggroBot.Request.Type.STICKER);
-                    const groupId = +content.match(/\/stickers\/(\d+)\//i)[1];
+                    const groupId = content.match(/\/stickers\/(\d+)\//i)[1];
                     switch (groupId) {
                         case 4: request.stickerGroupName = "pony"; break;
                         case 6: request.stickerGroupName = "cat"; break;
@@ -235,13 +235,6 @@ const AggroBot = class {
         this._spamDetector = new AggroBot.SpamDetector();
 
         /**
-         * Последняя реакция на флуд/спам
-         * @type {string | null}
-         * @private
-         */
-        this._spamResponse = null;
-
-        /**
          * Флаг установлен, если бот игнорирует запросы о подготовке ответа
          * @type {boolean}
          * @private
@@ -317,12 +310,12 @@ const AggroBot = class {
             const {result, variables} = this._spamDetector.analyzeNext(request);
             if (result) {
                 Object.assign(this._variables, variables);
-                this._spamResponse = this._getMessage(result);
+                this._processAndAddToQueue(this._getMessage(result), {
+                    readDelay: AggroBot.getTimeToRead(request),
+                    isSpamResponse: true
+                });
             }
-            else {
-                this._ignoringPrepareRequests = this._spamDetector.state === AggroBot.SpamDetector.State.IGNORING;
-                this._spamResponse = null;
-            }
+            else this._ignoringPrepareRequests = this._spamDetector.state === AggroBot.SpamDetector.State.IGNORING;
         }
         
         if(!this._responseQueue[0]) this._resetInactiveTimeout();
@@ -337,71 +330,62 @@ const AggroBot = class {
 
         if (this._ignoringPrepareRequests) return;
 
-        // Отправляем реакцию на флуд/спам
-        if (this._spamResponse) {
-            this._processAndAddToQueue(this._spamResponse, {
-                readDelay: AggroBot.getTimeToRead(request),
-                isSpamResponse: true
-            });
-            this._spamResponse = null;
-            return;
-        }
-
-        // Отправляем приветствие
         if (!this._greeted) {
             this._greeted = true;
             this._processAndAddToQueue(this._getMessage("greetings"), {
                 discardOnMessage: true
             });
-            return;
         }
+        else {
 
-        // Проверяем, занят ли бот
-        const ready = !this._responseQueue[0] || this._responseQueue.every(queued => !queued.blockQueue);
-        let added = false;
+            // Проверяем, занят ли бот
+            const ready = !this._responseQueue[0] || this._responseQueue.every(queued => !queued.blockQueue);
+            let added = false;
 
-        // Пытаемся найти ответ по регулярному выражению или на особые типы контента
-        if (request != null) switch (request.type) {
-            case AggroBot.Request.Type.TEXT:
-                const {message, pattern} = this._getAnswer(request.text);
-                if (message != null) this._processAndAddToQueue(message, {
-                    readDelay: AggroBot.getTimeToRead(request),
-                    pattern: pattern
-                }) && (added = true);
-                break;
-            case AggroBot.Request.Type.PHOTO:
-                if (!this._responseQueue.some(queued => queued.pattern == "photo")) this._processAndAddToQueue(this._getMessage("photo"), {
-                    readDelay: AggroBot.getTimeToRead(request),
-                    pattern: "photo"
-                }) && (added = true);
-                break;
-            case AggroBot.Request.Type.STICKER:
-                const databaseKey = `sticker_${request.stickerGroupName}`;
-                if (this._database.has(databaseKey) && !this._responseQueue.some(queued => queued.pattern == "sticker")) {
-                    this._processAndAddToQueue(this._getMessage(databaseKey), {
+            // Пытаемся найти ответ по регулярному выражению или на особые типы контента
+            if (request != null) switch (request.type) {
+                case AggroBot.Request.Type.TEXT:
+                    const {message, pattern} = this._getAnswer(request.text);
+                    if (message != null) this._processAndAddToQueue(message, {
                         readDelay: AggroBot.getTimeToRead(request),
-                        pattern: "sticker"
-                    });
-                    added = true;
-                }
-                break;
-        }
+                        pattern: pattern
+                    }) && (added = true);
+                    break;
+                case AggroBot.Request.Type.PHOTO:
+                    if (!this._responseQueue.some(queued => queued.pattern == "photo")) this._processAndAddToQueue("photo", {
+                        readDelay: AggroBot.getTimeToRead(request),
+                        pattern: "photo"
+                    }) && (added = true);
+                    break;
+                case AggroBot.Request.Type.STICKER:
+                    const databaseKey = `sticker_${request.stickerGroupName}`;
+                    if (this._database.has(databaseKey) && !this._responseQueue.some(queued => queued.pattern == "sticker")) {
+                        this._processAndAddToQueue(databaseKey, {
+                            readDelay: AggroBot.getTimeToRead(request),
+                            pattern: "sticker"
+                        });
+                        added = true;
+                    }
+                    break;
+            }
 
-        // Добавляем в очередь новый первичный ответ, если бот не занят
-        if (!added && ready) {
-            this._processAndAddToQueue(this._getMessage("primary"), {
-                readDelay: AggroBot.getTimeToRead(request)
-            });
-            added = true;
-        }
+            // Добавляем в очередь новый первичный ответ, если бот не занят
+            else if (!added && ready) {
+                this._processAndAddToQueue(this._getMessage("primary"), {
+                    readDelay: AggroBot.getTimeToRead(request)
+                });
+                added = true;
+            }
 
-        // Добавляем вторичные ответы
-        if (added) while (Math.random() < AggroBot.PROBABILITY_SECONDARY) {
-            this._processAndAddToQueue(this._getMessage("secondary"), {
-                readDelay: AggroBot.TIME_ADDITIONAL_READ_DELAY,
-                interruptOnTyping: false,
-                discardOnMessage: true
-            });
+            // Добавляем вторичные ответы
+            if (added) while (Math.random() < AggroBot.PROBABILITY_SECONDARY) {
+                this._processAndAddToQueue(this._getMessage("secondary"), {
+                    readDelay: AggroBot.TIME_ADDITIONAL_READ_DELAY,
+                    interruptOnTyping: false,
+                    discardOnMessage: true
+                });
+            }
+
         }
 
     }
