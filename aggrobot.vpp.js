@@ -1215,7 +1215,7 @@ AggroBot.Database = class {
     reset() {
 
         // noinspection JSCheckFunctionSignatures
-        Object.keys(this).forEach(key => key !== "answers" && this[key].reset());
+        Object.keys(this).forEach(key => key !== "answers" && this[key].hardReset());
 
     }
 
@@ -1371,12 +1371,22 @@ AggroBot.ResponseSet = class {
     }
 
     /**
-     * Генерирует новое состояние ответов
+     * Сбрасывает флаг использованности ответов, если они не уникальные
      */
     reset() {
 
         this._totalAvailable = 0;
         this.forEach(response => !response.unique && ++this._totalAvailable && (response.used = false));
+
+    }
+
+    /**
+     * Генерирует новое состояние ответов
+     */
+    hardReset() {
+
+        this._totalAvailable = this._array.length;
+        this.forEach(response => response.used = false);
 
     }
 
