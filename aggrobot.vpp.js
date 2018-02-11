@@ -87,6 +87,16 @@ const enableScript = () => {
         };
         aggroBot.onReport = message => chat.log(message);
 
+        aggroBot.onImageReady = imageURL => {
+            if (!chat.isChatStarted()) return;
+            const chatId = chat.chatId;
+            const image = new VPP.Image(imageURL);
+            image.onLoad = () => {
+                image.onUpload = () => chat.chatId == chatId && chat.sendImage(image);
+                image.upload();
+            };
+        };
+
         chat.removeEventListener("aggrobot");
         chat.addEventListener(VPP.Chat.Event.CONNECTED, "aggrobot", () => {
 
@@ -248,6 +258,13 @@ const AggroBot = class {
          */
         this._ignoringPrepareRequests = false;
 
+        /**
+         * Флаг установлен, если бот уже посылал своё фото
+         * @type {boolean}
+         * @private
+         */
+        this._photoSent = false;
+
     }
 
     /**
@@ -352,10 +369,29 @@ const AggroBot = class {
         // Проверяем, занят ли бот
         const ready = !this._responseQueue[0] || this._responseQueue.every(queued => !queued.blockQueue);
         let added = false;
+        let allowSecondary = true;
 
         // Пытаемся найти ответ по регулярному выражению или на особые типы контента
         if (request != null) switch (request.type) {
             case AggroBot.Request.Type.TEXT:
+                if (!this._photoSent &&
+                        /(фот|селфи)[а-яё]* (с?кин(ь|еш)|кида(й|еш)|го(?![а-я])|сдела(й|еш)|(при|вы|ото)шл(и|еш)|отправ(ь|иш))|(кин|кида|([^а-яё]|^)го|сдела|(при|вы|ото)шл|отправ)(и|й|еш|иш)ь? (фот|селфи)|сфот(к?а|огр[ао]фиру)й(ся| себя)/i.test(request.text) &&
+                        !this._responseQueue.some(queued => queued.pattern == "photo_sending")) {
+                    this._processAndAddToQueue(this._getMessage("photo_sending"), {
+                        readDelay: AggroBot.getTimeToRead(request),
+                        pattern: "photo_sending"
+                    });
+                    const queued = new AggroBot.QueuedResponse(AggroBot.selfieURL, AggroBot.QueuedResponse.ContentType.IMAGE);
+                    queued.readDelay = AggroBot.TIME_TO_MAKE_PHOTO;
+                    queued.pattern = "photo_sending";
+                    queued.interruptOnTyping = false;
+                    queued.interruptOnMessage = false;
+                    this._enqueueResponse(queued);
+                    this._photoSent = true;
+                    added = true;
+                    allowSecondary = false;
+                    break;
+                }
                 const {message, pattern} = this._getAnswer(request.text);
                 if (message != null) this._processAndAddToQueue(message, {
                     readDelay: AggroBot.getTimeToRead(request),
@@ -389,7 +425,7 @@ const AggroBot = class {
         }
 
         // Добавляем вторичные ответы
-        if (added) while (Math.random() < AggroBot.PROBABILITY_SECONDARY) {
+        if (added && allowSecondary) while (Math.random() < AggroBot.PROBABILITY_SECONDARY) {
             this._processAndAddToQueue(this._getMessage("secondary"), {
                 readDelay: AggroBot.TIME_ADDITIONAL_READ_DELAY,
                 interruptOnTyping: false,
@@ -427,6 +463,11 @@ const AggroBot = class {
     onMessageReady() {}
 
     /**
+     * Вызывается, когда нужно отправить изображение от бота
+     */
+    onImageReady() {}
+
+    /**
      * Вызывается, когда бот инициирует завершение чата
      */
     onConversationFinish() {}
@@ -462,8 +503,9 @@ const AggroBot = class {
 
         this._readTimeout = null;
         this._typingStartedTime = Date.now();
-        this.onTypingStart();
-        this._typeTimeout = setTimeout(this._setTypingFinished.bind(this), this._responseQueue[0].typeDelay);
+        const typeDelay = this._responseQueue[0].typeDelay;
+        if (typeDelay) this.onTypingStart();
+        this._typeTimeout = setTimeout(this._setTypingFinished.bind(this), typeDelay);
 
     }
 
@@ -475,7 +517,16 @@ const AggroBot = class {
 
         this._typeTimeout = null;
         this.onTypingFinish();
-        this.onMessageReady(this._responseQueue.shift().message);
+
+        const queued = this._responseQueue.shift();
+        switch (queued.contentType) {
+            case AggroBot.QueuedResponse.ContentType.TEXT:
+                this.onMessageReady(queued.message);
+                break;
+            case AggroBot.QueuedResponse.ContentType.IMAGE:
+                this.onImageReady(queued.imageURL);
+                break;
+        }
         this._directResponse = false;
         this._setQueueUpdated();
 
@@ -911,6 +962,11 @@ Object.assign(AggroBot, {
     },
 
     /**
+     * Время, в течение которого бот делает фотографию
+     */
+    TIME_TO_MAKE_PHOTO: 8000,
+
+    /**
      * Время, на которое бот прерывается, когда замечает, что собеседник печатает, мс
      */
     TIME_WAIT: 4000,
@@ -961,7 +1017,12 @@ Object.assign(AggroBot, {
     /**
      * ... короткое имя бота
      */
-    shortName: "Тоха"
+    shortName: "Тоха",
+
+    /**
+     * Ссылка на фото, которое бот будет отправлять в чат
+     */
+    selfieURL: "https://s17.postimg.org/wv15aam4f/image.jpg"
 
 });
 
@@ -1018,15 +1079,40 @@ AggroBot.QueuedResponse = class {
 
     /**
      * @constructor
-     * @param {string} message
+     * @param {string} content Содержимое ответа
+     * @param {number} contentType Тип содержимого
      */
-    constructor(message) {
+    constructor(content, contentType = AggroBot.QueuedResponse.ContentType.TEXT) {
 
         /**
-         * Сообщение
-         * @type {string}
+         * Тип содержимого
+         * @type {number}
          */
-        this.message = message;
+        this.contentType = contentType;
+
+        switch (contentType) {
+
+            case AggroBot.QueuedResponse.ContentType.TEXT:
+
+                /**
+                 * Сообщение
+                 * @type {string}
+                 */
+                this.message = content;
+
+                break;
+
+            case AggroBot.QueuedResponse.ContentType.IMAGE:
+
+                /**
+                 * Ссылка на изображение
+                 * @type {string}
+                 */
+                this.imageURL = content;
+
+                break;
+
+        }
 
         /**
          * Время, необходимое для чтения запроса
@@ -1063,8 +1149,18 @@ AggroBot.QueuedResponse = class {
          * @type {*}
          */
         this.pattern = null;
-        
+
+        /**
+         * Флаг: является ли ответ ответом на флуд/спам
+         * @type {boolean}
+         */
         this.isSpamResponse = false;
+
+        /**
+         * Время, необходимое для печати ответа
+         * @type {number}
+         */
+        this.typeDelay = 0;
 
         this.calculateTypeDelay();
 
@@ -1075,15 +1171,28 @@ AggroBot.QueuedResponse = class {
      */
     calculateTypeDelay() {
 
-        /**
-         * Время, необходимое для печати ответа
-         * @type {number}
-         */
-        this.typeDelay = AggroBot.getTimeToType(this.message);
+        switch (this.contentType) {
+            case AggroBot.QueuedResponse.ContentType.TEXT:
+                this.typeDelay = AggroBot.getTimeToType(this.message);
+                break;
+            case AggroBot.QueuedResponse.ContentType.IMAGE:
+                this.typeDelay = 0;
+                break;
+        }
 
     }
 
 };
+
+/**
+ * Тип содержимого ответа в очереди
+ * @enum
+ * @readonly
+ */
+AggroBot.QueuedResponse.ContentType = Object.freeze({
+    TEXT: 0,
+    IMAGE: 1
+});
 
 /**
  * База сообщений бота
@@ -1798,10 +1907,10 @@ AggroBot.SpamDetector = class {
             if (slice.every(request => request.type === AggroBot.Request.Type.TEXT)) {
 
                 slice = slice.map(request => request.text);
-                const joined = slice.join("");
+                const joined = slice.join("").toLowerCase();
 
                 // Проверяем на одинаковые символы
-                let first = slice[0];
+                let first = slice[0].toLowerCase();
                 if (/^(.)\1*$/.test(first) && joined.split("").every(ch => ch == first.charAt(0))) {
                     first = first.charAt(0);
                     const characterName = AggroBot.SpamDetector.CHARACTER_NAMES[first];
@@ -1809,6 +1918,11 @@ AggroBot.SpamDetector = class {
                         result = "spam_character";
                         variables["character"] = first;
                         variables["charactername"] = variation => characterName[variation] || characterName["singular"];
+                        return;
+                    }
+                    else if (/[а-яёa-z]/.test(first)) {
+                        result = "spam_same_letter";
+                        variables["letter"] = first;
                         return;
                     }
                 }
@@ -1827,7 +1941,7 @@ AggroBot.SpamDetector = class {
                 }
 
                 // Проверяем на одиночные буквы
-                if (slice.every(str => /^[а-яёa-z]$/.test(str))) {
+                if (slice.every(str => /^[а-яёa-z]$/i.test(str))) {
                     result = "spam_single_letter_or_digit";
                     variables["letterordigit"] = letter => letter;
                     variables["gletterordigit"] = function(letterMale, letterFemale) {
@@ -1837,7 +1951,7 @@ AggroBot.SpamDetector = class {
                 }
 
                 // Проверяем на повторы
-                const clean = str => str.replace(/[^а-яё0-9 ]/g, "");
+                const clean = str => str.toLowerCase().replace(/[^а-яё0-9 ]/g, "");
                 first = clean(first);
                 if (slice.every(str => clean(str) == first)) return result = "spam_repetition";
 
@@ -1962,7 +2076,7 @@ Object.assign(AggroBot.SpamDetector, {
     
 });
 
-AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP = new RegExp(`([^а-яё]|^)(${AggroBot.SpamDetector.COMMON_WORDS.join("|")})([^а-яё]|$)|(${AggroBot.SpamDetector.COMMON_LETTER_COMBINATIONS.join("|")})`);
+AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP = new RegExp(`([^а-яё]|^)(${AggroBot.SpamDetector.COMMON_WORDS.join("|")})([^а-яё]|$)|(${AggroBot.SpamDetector.COMMON_LETTER_COMBINATIONS.join("|")})`, "i");
 
 VPP.Chat.prototype.aggrobot = (command, ...args) => {
 
