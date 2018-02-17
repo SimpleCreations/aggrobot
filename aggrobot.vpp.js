@@ -1274,8 +1274,7 @@ Object.assign(AggroBot.Database, {
     fromRaw(raw) {
 
         const database = new AggroBot.Database();
-        Object.keys(raw).forEach(key => {
-            if (key === "answers") return;
+        Object.keys(raw).filter(key => Array.isArray(raw[key])).forEach(key => {
             const set = new AggroBot.ResponseSet();
             raw[key].forEach(string => set.add(new AggroBot.Response(new String(string))));
             database[key] = set;
@@ -1312,8 +1311,7 @@ Object.assign(AggroBot.Database, {
 
         const database = new AggroBot.Database();
         // noinspection JSCheckFunctionSignatures
-        Object.keys(anotherDatabase).forEach(key => {
-            if (key === "answers") return;
+        Object.keys(anotherDatabase).filter(key => anotherDatabase[key] instanceof AggroBot.ResponseSet).forEach(key => {
             const set = new AggroBot.ResponseSet();
             anotherDatabase[key].forEach(response => set.add(new AggroBot.Response(response.string)));
             database[key] = set;
