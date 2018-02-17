@@ -522,6 +522,7 @@ const AggroBot = class {
         switch (queued.contentType) {
             case AggroBot.QueuedResponse.ContentType.TEXT:
                 this.onMessageReady(queued.message);
+                this._spamDetector.storeOutput(queued.message);
                 break;
             case AggroBot.QueuedResponse.ContentType.IMAGE:
                 this.onImageReady(queued.imageURL);
@@ -1883,6 +1884,13 @@ AggroBot.SpamDetector = class {
          * @private
          */
         this._buffer = [];
+
+        /**
+         * Буфер исходящих текстовых сообщений
+         * @type {Array<string>}
+         * @private
+         */
+        this._outputBuffer = [];
         
     }
 
@@ -1961,9 +1969,15 @@ AggroBot.SpamDetector = class {
                 }
 
                 // Проверяем на повторы
-                const clean = str => str.toLowerCase().replace(/[^а-яё0-9 ]/g, "");
-                first = clean(first);
-                if (slice.every(str => clean(str) == first)) return result = "spam_repetition";
+                const clean = slice.map(AggroBot.SpamDetector.cleanString);
+                first = clean[0];
+                if (first && slice.every(str => str == first)) return result = "spam_repetition";
+
+                // Проверяем на копирование за ботом
+                if (clean.some(str => str.length > 6) && clean.every(str => this._outputBuffer.some(output =>
+                        AggroBot.SpamDetector.levenshteinDistance(str, output) / Math.min(str.length, output.length) < 0.15))) {
+                    return result = "spam_copying";
+                }
 
             }
 
@@ -2012,6 +2026,19 @@ AggroBot.SpamDetector = class {
         return {result, variables};
         
     }
+
+    /**
+     * Сохраняет ответ бота в буфере ответов (для проверки на копирование за ботом)
+     * @param {string} response
+     */
+    storeOutput(response) {
+
+        response = AggroBot.SpamDetector.cleanString(response);
+        if (!response) return;
+        this._outputBuffer.push(response);
+        if (this._outputBuffer.length > AggroBot.SpamDetector.OUTPUT_BUFFER_SIZE) this._outputBuffer.shift();
+
+    }
     
 };
 
@@ -2025,10 +2052,33 @@ Object.assign(AggroBot.SpamDetector, {
     },
     
     BUFFER_SIZE: 4,
+    OUTPUT_BUFFER_SIZE: 12,
     MESSAGES_TO_CHECK_SIMPLE: 3,
     MESSAGES_TO_CHECK_ADVANCED: 4,
     STICKERS_CONSIDERED_SPAM: 2,
     PHOTOS_CONSIDERED_SPAM: 3,
+
+    cleanString(str) {
+        return str.toLowerCase().replace(/[^а-яёa-z0-9 ]/g, "").trim();
+    },
+
+    levenshteinDistance(str1, str2) {
+
+        if (!str1 || !str2) return (str1 || str2).length;
+
+        const matrix = [];
+        for (let i = 0; i <= str2.length; matrix[i] = [i++]);
+        for (let j = 0; j <= str1.length; matrix[0][j] = j++);
+
+        for (let i = 1; i <= str2.length; i++) for (let j = 1; j <= str1.length; j++) {
+            matrix[i][j] = str2.charAt(i - 1) == str1.charAt(j - 1) ?
+                matrix[i - 1][j - 1] :
+                matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, Math.min(matrix[i][j - 1] + 1, matrix[i - 1 ][j]));
+        }
+
+        return matrix[str2.length][str1.length];
+
+    },
 
     CHARACTER_NAMES: {
         "!": {singular: "воскл знак", plural: "воскл знаки", accusative: "воскл знак"},
