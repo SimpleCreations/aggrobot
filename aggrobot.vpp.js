@@ -265,6 +265,13 @@ const AggroBot = class {
          */
         this._photoSent = false;
 
+        /**
+         * Сколько раз бот отвечал условным ответом
+         * @type {number}
+         * @private
+         */
+        this._respondedByCondition = 0;
+
     }
 
     /**
@@ -368,6 +375,8 @@ const AggroBot = class {
 
         // Проверяем, занят ли бот
         const ready = !this._responseQueue[0] || this._responseQueue.every(queued => !queued.blockQueue);
+
+        const defaultOptions = {readDelay: AggroBot.getTimeToRead(request)};
         let added = false;
         let allowSecondary = true;
 
@@ -377,10 +386,9 @@ const AggroBot = class {
                 if (!this._photoSent &&
                         /(фот|селфи)[а-яё]* (себя |сво[еёию] )?(с?кин(ь|еш)|кида(й|еш)|го(?![а-я])|сдела(й|еш)|(при|вы|ото)шл(и|еш)|отправ(ь|иш))|(кин|кида|([^а-яё]|^)го|сдела|(при|вы|ото)шл|отправ)(и|й|еш|иш)?ь? (себя |сво[еёию] )?(фот|селфи)|сфот(к?а|огр[ао]фиру)й(ся| себя)/i.test(request.text) &&
                         !this._responseQueue.some(queued => queued.pattern == "photo_sending")) {
-                    this._processAndAddToQueue(this._getMessage("photo_sending"), {
-                        readDelay: AggroBot.getTimeToRead(request),
+                    this._processAndAddToQueue(this._getMessage("photo_sending"), Object.assign({
                         pattern: "photo_sending"
-                    });
+                    }, defaultOptions));
                     const queued = new AggroBot.QueuedResponse(AggroBot.selfieURL, AggroBot.QueuedResponse.ContentType.IMAGE);
                     queued.readDelay = AggroBot.TIME_TO_MAKE_PHOTO;
                     queued.pattern = "photo_sending";
@@ -393,34 +401,51 @@ const AggroBot = class {
                     break;
                 }
                 const {message, pattern} = this._getAnswer(request.text);
-                if (message != null) this._processAndAddToQueue(message, {
-                    readDelay: AggroBot.getTimeToRead(request),
+                if (message != null) this._processAndAddToQueue(message, Object.assign({
                     pattern: pattern
-                }) && (added = true);
+                }, defaultOptions)) && (added = true);
                 break;
             case AggroBot.Request.Type.PHOTO:
-                if (!this._responseQueue.some(queued => queued.pattern == "photo")) this._processAndAddToQueue(this._getMessage("photo"), {
-                    readDelay: AggroBot.getTimeToRead(request),
+                if (!this._responseQueue.some(queued => queued.pattern == "photo")) this._processAndAddToQueue(this._getMessage("photo"), Object.assign({
                     pattern: "photo"
-                }) && (added = true);
+                }, defaultOptions)) && (added = true);
                 break;
             case AggroBot.Request.Type.STICKER:
                 const databaseKey = `sticker_${request.stickerGroupName}`;
                 if (this._database.has(databaseKey) && !this._responseQueue.some(queued => queued.pattern == "sticker")) {
-                    this._processAndAddToQueue(this._getMessage(databaseKey), {
-                        readDelay: AggroBot.getTimeToRead(request),
+                    this._processAndAddToQueue(this._getMessage(databaseKey), Object.assign({
                         pattern: "sticker"
-                    });
+                    }, defaultOptions));
                     added = true;
                 }
                 break;
         }
 
+        // Добавялем в очередь условный ответ
+        if (!added && ready && Math.random() < AggroBot.getConditionalResponseProbability(this._respondedByCondition)) {
+            console.log("picking conditional response...");
+            const possibleSets = Object.keys(AggroBot.satisfiesCondition).filter(key =>
+                this._database.conditional.has(key) && AggroBot.satisfiesCondition[key]()).map(key =>
+                this._database.conditional.get(key));
+            let response = null;
+            while (!response && possibleSets.length) {
+                const index = Math.floor(Math.random() * possibleSets.length);
+                response = possibleSets[index].getRandom();
+                if (!response) possibleSets.splice(index, 1);
+            }
+            if (response) {
+                const message = this._processMessage(response.string);
+                if (message) {
+                    this._processAndAddToQueue(message, defaultOptions);
+                    this._respondedByCondition++;
+                    added = true;
+                }
+            }
+        }
+
         // Добавляем в очередь новый первичный ответ, если бот не занят
         if (!added && ready) {
-            this._processAndAddToQueue(this._getMessage("primary"), {
-                readDelay: AggroBot.getTimeToRead(request)
-            });
+            this._processAndAddToQueue(this._getMessage("primary"), defaultOptions);
             added = true;
         }
 
@@ -1006,6 +1031,53 @@ Object.assign(AggroBot, {
     },
 
     /**
+     * Возвращает вероятность вставки условного ответа в зависимости от количества уже отправленных таких ответов
+     * @param amountOfResponses
+     * @returns {number}
+     */
+    getConditionalResponseProbability(amountOfResponses) {
+        return 1 / (125 * (amountOfResponses + 1));
+    },
+
+    /**
+     * Функции, проверящие, удовлетворены ли определённые условия отправки условных фраз
+     */
+    satisfiesCondition: {
+
+        "time_late": () => {
+            const hour = new Date().getHours();
+            return hour <= 5 || hour >= 23;
+        },
+
+        "time_before_school": () => {
+            const now = new Date();
+            const month = now.getMonth(), day = now.getDate(), dayOfWeek = now.getDay();
+            if (month == 5 || month == 6 || month == 4 && day >= 20 || month == 7 && day <= 20 ||
+                    month == 11 && day >= 20 || month == 0 && day < 7 || dayOfWeek == 6) return false;
+            const hour = now.getHours();
+            return dayOfWeek != 5 && hour >= 19 || dayOfWeek != 0 && hour <= 8;
+        },
+
+        "time_school_day": () => {
+            const now = new Date();
+            const month = now.getMonth(), day = now.getDate(), dayOfWeek = now.getDay();
+            return !(month == 5 || month == 6 || month == 7 || month == 4 && day >= 20 ||
+                    month == 11 && day >= 20 || month == 0 && day < 7 || dayOfWeek == 0 || dayOfWeek == 6);
+        },
+
+        "time_after_school": () => {
+            const hour = new Date().getHours();
+            return AggroBot.satisfiesCondition["time_school_day"]() && hour >= 14 && hour <= 18;
+        },
+
+        "time_during_school_hours": () => {
+            const hour = new Date().getHours();
+            return AggroBot.satisfiesCondition["time_school_day"]() && hour >= 9 && hour < 14;
+        },
+
+    },
+
+    /**
      * Внутреннее имя бота
      */
     firstName: "Антон",
@@ -1208,6 +1280,11 @@ AggroBot.Database = class {
          */
         this.answers = [];
 
+        /**
+         * @type {Map<string, AggroBot.ResponseSet>}
+         */
+        this.conditional = new Map();
+
     }
 
     /**
@@ -1216,7 +1293,10 @@ AggroBot.Database = class {
     reset() {
 
         // noinspection JSCheckFunctionSignatures
-        Object.keys(this).forEach(key => key !== "answers" && this[key].hardReset());
+        Object.keys(this).forEach(key => this.has(key) && this[key].hardReset());
+
+        this.answers.forEach(matcher => matcher.responses.hardReset());
+        this.conditional.forEach(set => set.hardReset());
 
     }
 
@@ -1303,6 +1383,16 @@ Object.assign(AggroBot.Database, {
             database.answers.push(new AggroBot.Matcher(regExp, set));
         });
 
+        if (typeof raw.conditional === "object") Object.keys(raw.conditional).forEach(key => {
+            const set = new AggroBot.ResponseSet();
+            raw.conditional[key].forEach(string => {
+                const response = new AggroBot.Response(new String(string));
+                response.unique = true;
+                set.add(response);
+            });
+            database.conditional.set(key, set);
+        });
+
         return database;
 
     },
@@ -1315,25 +1405,16 @@ Object.assign(AggroBot.Database, {
     fromAnother(anotherDatabase) {
 
         const database = new AggroBot.Database();
+
         // noinspection JSCheckFunctionSignatures
-        Object.keys(anotherDatabase).filter(key => anotherDatabase[key] instanceof AggroBot.ResponseSet).forEach(key => {
-            const set = new AggroBot.ResponseSet();
-            anotherDatabase[key].forEach(response => {
-                const newResponse = new AggroBot.Response(response.string);
-                newResponse.unique = response.unique;
-                set.add(newResponse);
-            });
-            database[key] = set;
-        });
-        anotherDatabase.answers.forEach(matcher => {
-            const set = new AggroBot.ResponseSet();
-            matcher.responses.forEach(response => {
-                const newResponse = new AggroBot.Response(response.string);
-                newResponse.unique = true;
-                set.add(newResponse);
-            });
-            database.answers.push(new AggroBot.Matcher(matcher.regExp, set));
-        });
+        Object.keys(anotherDatabase).filter(key => anotherDatabase.has(key)).forEach(key =>
+            database[key] = anotherDatabase[key].clone());
+
+        anotherDatabase.answers.forEach(matcher =>
+            database.answers.push(new AggroBot.Matcher(matcher.regExp, matcher.responses.clone())));
+
+        database.conditional.forEach((set, key) =>
+            anotherDatabase.conditional.set(key, set.clone()));
 
         return database;
 
@@ -1419,6 +1500,22 @@ AggroBot.ResponseSet = class {
             }
             counter++;
         }
+
+    }
+
+    /**
+     * Копирует множество ответов, не сохраняя только состояние использованности
+     * @returns {AggroBot.ResponseSet}
+     */
+    clone() {
+
+        const set = new AggroBot.ResponseSet();
+        this.forEach(response => {
+            const newResponse = new AggroBot.Response(response.string);
+            if (response.unique) newResponse.unique = true;
+            set.add(newResponse);
+        });
+        return set;
 
     }
 
