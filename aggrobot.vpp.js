@@ -351,8 +351,8 @@ const AggroBot = class {
                 this._setQueueUpdated();
             }
         }
-        
-        if(!this._responseQueue[0]) this._resetInactiveTimeout();
+
+        if (!this._responseQueue[0]) this._resetInactiveTimeout();
 
     }
 
@@ -413,10 +413,10 @@ const AggroBot = class {
             case AggroBot.Request.Type.STICKER:
                 const databaseKey = `sticker_${request.stickerGroupName}`;
                 if (this._database.has(databaseKey) && !this._responseQueue.some(queued => queued.pattern == "sticker")) {
-                    this._processAndAddToQueue(this._getMessage(databaseKey), Object.assign({
+                    const message = this._getMessage(databaseKey);
+                    if (message) this._processAndAddToQueue(message, Object.assign({
                         pattern: "sticker"
-                    }, defaultOptions));
-                    added = true;
+                    }, defaultOptions)) && (added = true);
                 }
                 break;
         }
@@ -570,6 +570,7 @@ const AggroBot = class {
         clearTimeout(this._activityCheckTimeout);
         if (!this._intendsToLeave) this._activityCheckTimeout = setTimeout(() => {
             this._activityCheckTimeout = null;
+            if (this._ignoringPrepareRequests) return this._resetInactiveTimeout();
             switch (++this._inactivityCounter) {
                 case 1:
                     this.prepareResponse();
@@ -677,7 +678,8 @@ const AggroBot = class {
      */
     _getRawMessage(databaseKey) {
 
-        return this._database.getRandom(databaseKey).string;
+        const response = this._database.getRandom(databaseKey);
+        return response && response.string;
 
     }
 
@@ -774,7 +776,7 @@ const AggroBot = class {
      */
     _getMessage(databaseKey) {
 
-        let message = this._processMessage(this._getRawMessage(databaseKey));
+        const message = this._processMessage(this._getRawMessage(databaseKey));
         return message != null ? message : this._getMessage(databaseKey);
 
     }
@@ -1058,8 +1060,8 @@ Object.assign(AggroBot, {
             return dayOfWeek != 5 && hour >= 19 || dayOfWeek != 0 && hour <= 8;
         },
 
-        "time_school_day": () => {
-            const now = new Date();
+        "time_school_day": (dayOffset = 0) => {
+            const now = new Date(Date.now() + dayOffset * 24 * 60 * 60 * 1000);
             const month = now.getMonth(), day = now.getDate(), dayOfWeek = now.getDay();
             return !(month == 5 || month == 6 || month == 7 || month == 4 && day >= 20 ||
                     month == 11 && day >= 20 || month == 0 && day < 7 || dayOfWeek == 0 || dayOfWeek == 6);
@@ -1074,6 +1076,10 @@ Object.assign(AggroBot, {
             const hour = new Date().getHours();
             return AggroBot.satisfiesCondition["time_school_day"]() && hour >= 9 && hour < 14;
         },
+
+        "time_school_tomorrow": () => {
+            return AggroBot.satisfiesCondition["time_school_day"](1);
+        }
 
     },
 
