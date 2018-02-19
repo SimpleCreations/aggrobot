@@ -1038,7 +1038,7 @@ Object.assign(AggroBot, {
      * @returns {number}
      */
     getConditionalResponseProbability(amountOfResponses) {
-        return 1 / (125 * (amountOfResponses + 1));
+        return 1 / (50 * (amountOfResponses + 1));
     },
 
     /**
