@@ -1069,12 +1069,12 @@ Object.assign(AggroBot, {
 
         "time_after_school": () => {
             const hour = new Date().getHours();
-            return AggroBot.satisfiesCondition["time_school_day"]() && hour >= 14 && hour <= 18;
+            return AggroBot.satisfiesCondition["time_school_day"]() && hour >= 15 && hour <= 18;
         },
 
         "time_during_school_hours": () => {
             const hour = new Date().getHours();
-            return AggroBot.satisfiesCondition["time_school_day"]() && hour >= 9 && hour < 14;
+            return AggroBot.satisfiesCondition["time_school_day"]() && hour >= 9 && hour < 15;
         },
 
         "time_school_tomorrow": () => {
