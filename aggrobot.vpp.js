@@ -1,6 +1,6 @@
 // ==VPPScript==
 // @name            AggroBot
-// @version         0.1.2
+// @version         1.0.0
 // @script-filename aggrobot.vpp.js
 // @update-url      https://raw.githubusercontent.com/SimpleCreations/aggrobot/master/update.json
 // @script-url      https://raw.githubusercontent.com/SimpleCreations/aggrobot/master/aggrobot.vpp.js
@@ -28,16 +28,13 @@ $.ajax({
     .pipe(response => response["script_version"] ? response : $.Deferred().reject())
     .done(response => {
 
-        log(compareVersions(response["script_version"], VPPScript.meta["version"]) < 0 ?
-
-            `Вы используете устаревший скрипт.<br>
+        if (compareVersions(response["script_version"], VPPScript.meta["version"]) < 0) {
+            return log(`Вы используете устаревший скрипт.<br>
 Текущая версия: ${VPPScript.meta["version"]}<br>
 Последняя версия: ${response["script_version"]}<br>
-Введите "/aggrobot download", чтобы скачать последнюю версию.` :
-
-            `Вы используете последнюю версию скрипта.`
-
-        );
+Введите "/aggrobot download", чтобы скачать последнюю версию.`);
+        }
+        log("Вы используете последнюю версию скрипта.");
 
         if (!response["database_version"]) return log("Не удалось получить последнюю версию базы сообщений.");
         const currentDatabaseVersion = VPPScript.storage.databaseVersion;
@@ -84,8 +81,21 @@ const enableScript = () => {
         aggroBot.onTypingStart = () => chat.isChatStarted() && chat.setStartedTyping();
         aggroBot.onTypingFinish = () => chat.isChatStarted() && chat.setFinishedTyping();
         aggroBot.onMessageReady = message => chat.isChatStarted() && chat.sendMessage(message);
-        aggroBot.onConversationFinish = () => chat.isChatStarted() && chat.close();
+        aggroBot.onConversationFinish = () => {
+            aggroBot.suspend();
+            chat.isChatStarted() && chat.close();
+        };
         aggroBot.onReport = message => chat.log(message);
+
+        aggroBot.onImageReady = imageURL => {
+            if (!chat.isChatStarted()) return;
+            const chatId = chat.chatId;
+            const image = new VPP.Image(imageURL);
+            image.onLoad = () => {
+                image.onUpload = () => chat.chatId == chatId && chat.sendImage(image);
+                image.upload();
+            };
+        };
 
         chat.removeEventListener("aggrobot");
         chat.addEventListener(VPP.Chat.Event.CONNECTED, "aggrobot", () => {
@@ -98,9 +108,29 @@ const enableScript = () => {
 
         chat.addEventListener(VPP.Chat.Event.MESSAGE_RECEIVED, "aggrobot", (type, content) => {
 
-            const text = type === VPP.Chat.MessageType.TEXT ? content : "";
-            aggroBot.receiveMessage(text);
-            aggroBot.prepareResponse(text);
+            let request;
+            switch (type) {
+                case VPP.Chat.MessageType.TEXT:
+                    request = new AggroBot.Request(AggroBot.Request.Type.TEXT);
+                    request.text = content;
+                    break;
+                case VPP.Chat.MessageType.IMAGE:
+                    request = new AggroBot.Request(AggroBot.Request.Type.PHOTO);
+                    request.photoURL = content;
+                    break;
+                case VPP.Chat.MessageType.STICKER:
+                    request = new AggroBot.Request(AggroBot.Request.Type.STICKER);
+                    const groupId = +content.match(/\/stickers\/(\d+)\//i)[1];
+                    switch (groupId) {
+                        case 4: request.stickerGroupName = "pony"; break;
+                        case 6: request.stickerGroupName = "cat"; break;
+                        case 8: request.stickerGroupName = "nichosi"; break;
+                        case 9: request.stickerGroupName = "seagull"; break;
+                    }
+                    break;
+            }
+            aggroBot.receiveMessage(request);
+            aggroBot.prepareResponse(request);
 
         });
 
@@ -180,6 +210,13 @@ const AggroBot = class {
         this._directResponse = false;
 
         /**
+         * Намеревается ли бот покинуть чат после опустошения очереди
+         * @type {boolean}
+         * @private
+         */
+        this._intendsToLeave = false;
+
+        /**
          * Информация о пользователе
          * @type {AggroBot.UserProfile}
          * @private
@@ -192,6 +229,48 @@ const AggroBot = class {
          * @private
          */
         this._style = new AggroBot.Style();
+
+        /**
+         * Переменные, подставляемые во фразы
+         * @type {object}
+         * @private
+         */
+        this._variables = {};
+
+        /**
+         * Детектор флуда/спама
+         * @type {AggroBot.SpamDetector}
+         * @private
+         */
+        this._spamDetector = new AggroBot.SpamDetector();
+
+        /**
+         * Последний запрос, который посчитался флудом/спамом
+         * @type {AggroBot.Request}
+         * @private
+         */
+        this._spamRequest = null;
+
+        /**
+         * Флаг установлен, если бот игнорирует запросы о подготовке ответа
+         * @type {boolean}
+         * @private
+         */
+        this._ignoringPrepareRequests = false;
+
+        /**
+         * Флаг установлен, если бот уже посылал своё фото
+         * @type {boolean}
+         * @private
+         */
+        this._photoSent = false;
+
+        /**
+         * Сколько раз бот отвечал условным ответом
+         * @type {number}
+         * @private
+         */
+        this._respondedByCondition = 0;
 
     }
 
@@ -223,28 +302,23 @@ const AggroBot = class {
 
     /**
      * Уведомляет бота о том, что ему отослали сообщение
-     * @param {string} request Сообщение от собеседника
+     * @param {AggroBot.Request} request Сообщение от собеседника
      */
     receiveMessage(request) {
 
         // Пытаемся определить пол
-        this._determineGender(request);
+        if (request.type === AggroBot.Request.Type.TEXT) this._determineGender(request.text);
 
         // Полученное сообщение считается активностью, поэтому сбрасываем счётчик
         this._inactivityCounter = 0;
+        this._intendsToLeave = false;
 
         this._directResponse = true;
 
         // Смотрим, есть ли в очереди ответы, которые должны быть удалены из очереди во время получения сообщения
         let queueUpdated = false;
         if (this._responseQueue[0] && this._responseQueue[0].discardOnMessage) {
-            clearTimeout(this._readTimeout);
-            clearTimeout(this._typeTimeout);
-            clearTimeout(this._interruptedTimeout);
-            this._readTimeout = null;
-            this._typeTimeout = null;
-            this._interruptedTimeout = null;
-            this._resetInactiveTimeout();
+            this._removeNextQueuedResponse();
             queueUpdated = true;
         }
         this._responseQueue = this._responseQueue.filter(queued => !queued.discardOnMessage);
@@ -255,36 +329,133 @@ const AggroBot = class {
         if (nextQueued) {
             if (nextQueued.interruptOnMessage) this._interrupt(AggroBot.getTimeToRead(request));
         }
-        else this._resetInactiveTimeout();
+        
+        // Проверяем на спам/флуд
+        const alreadyResponding = this._responseQueue.some(queued => queued.isSpamResponse);
+        const {result, variables} = this._spamDetector.analyzeNext(request, alreadyResponding);
+        if (result) {
+            this._spamRequest = request;
+            if (!alreadyResponding) {
+                Object.assign(this._variables, variables);
+                this._processAndAddToQueue(this._getMessage(result), {
+                    readDelay: AggroBot.getTimeToRead(request),
+                    isSpamResponse: true
+                });
+            }
+        }
+        else {
+            this._spamRequest = null;
+            this._ignoringPrepareRequests = this._spamDetector.state === AggroBot.SpamDetector.State.IGNORING;
+            if (!this._ignoringPrepareRequests && this._responseQueue[0] && this._responseQueue[0].isSpamResponse) {
+                this._removeNextQueuedResponse();
+                this._setQueueUpdated();
+            }
+        }
+
+        if (!this._responseQueue[0]) this._resetInactiveTimeout();
 
     }
 
     /**
      * Готовит и откладывает ответ собеседнику
-     * @param {string} request Сообщение от собеседника
+     * @param {AggroBot.Request} request Сообщение от собеседника
      */
-    prepareResponse(request = "") {
+    prepareResponse(request = null) {
 
+        if (this._ignoringPrepareRequests || request != null && this._spamRequest == request) return;
+
+        // Отправляем приветствие
         if (!this._greeted) {
             this._greeted = true;
             this._processAndAddToQueue(this._getMessage("greetings"), {
                 discardOnMessage: true
             });
+            return;
         }
-        else {
-            // Добавляем в очередь новый первичный ответ, если бот не занят
-            if (!this._responseQueue[0] || this._responseQueue.every(queued => !queued.blockQueue)) {
-                this._processAndAddToQueue(this._getMessage("primary"), {
-                    readDelay: AggroBot.getTimeToRead(request)
-                });
-                while (Math.random() < AggroBot.PROBABILITY_SECONDARY) {
-                    this._processAndAddToQueue(this._getMessage("secondary"), {
-                        readDelay: AggroBot.TIME_ADDITIONAL_READ_DELAY,
-                        interruptOnTyping: false,
-                        discardOnMessage: true
-                    });
+
+        // Проверяем, занят ли бот
+        const ready = !this._responseQueue[0] || this._responseQueue.every(queued => !queued.blockQueue);
+
+        const defaultOptions = {readDelay: AggroBot.getTimeToRead(request)};
+        let added = false;
+        let allowSecondary = true;
+
+        // Пытаемся найти ответ по регулярному выражению или на особые типы контента
+        if (request != null) switch (request.type) {
+            case AggroBot.Request.Type.TEXT:
+                if (!this._photoSent &&
+                        /(фот|селфи)[а-яё]* (себя |сво[еёию] )?(с?кин(ь|еш)|кида(й|еш)|го(?![а-я])|сдела(й|еш)|(при|вы|ото)шл(и|еш)|отправ(ь|иш))|(кин|кида|([^а-яё]|^)го|сдела|(при|вы|ото)шл|отправ)(и|й|еш|иш)?ь? (себя |сво[еёию] )?(фот|селфи)|сфот(к?а|огр[ао]фиру)й(ся| себя)/i.test(request.text) &&
+                        !this._responseQueue.some(queued => queued.pattern == "photo_sending")) {
+                    this._processAndAddToQueue(this._getMessage("photo_sending"), Object.assign({
+                        pattern: "photo_sending"
+                    }, defaultOptions));
+                    const queued = new AggroBot.QueuedResponse(AggroBot.selfieURL, AggroBot.QueuedResponse.ContentType.IMAGE);
+                    queued.readDelay = AggroBot.TIME_TO_MAKE_PHOTO;
+                    queued.pattern = "photo_sending";
+                    queued.interruptOnTyping = false;
+                    queued.interruptOnMessage = false;
+                    this._enqueueResponse(queued);
+                    this._photoSent = true;
+                    added = true;
+                    allowSecondary = false;
+                    break;
+                }
+                const {message, pattern} = this._getAnswer(request.text);
+                if (message != null) this._processAndAddToQueue(message, Object.assign({
+                    pattern: pattern
+                }, defaultOptions)) && (added = true);
+                break;
+            case AggroBot.Request.Type.PHOTO:
+                if (!this._responseQueue.some(queued => queued.pattern == "photo")) this._processAndAddToQueue(this._getMessage("photo"), Object.assign({
+                    pattern: "photo"
+                }, defaultOptions)) && (added = true);
+                break;
+            case AggroBot.Request.Type.STICKER:
+                const databaseKey = `sticker_${request.stickerGroupName}`;
+                if (this._database.has(databaseKey) && !this._responseQueue.some(queued => queued.pattern == "sticker")) {
+                    const message = this._getMessage(databaseKey);
+                    if (message) this._processAndAddToQueue(message, Object.assign({
+                        pattern: "sticker"
+                    }, defaultOptions)) && (added = true);
+                }
+                break;
+        }
+
+        // Добавялем в очередь условный ответ
+        if (!added && ready && Math.random() < AggroBot.getConditionalResponseProbability(this._respondedByCondition)) {
+            console.log("picking conditional response...");
+            const possibleSets = Object.keys(AggroBot.satisfiesCondition).filter(key =>
+                this._database.conditional.has(key) && AggroBot.satisfiesCondition[key]()).map(key =>
+                this._database.conditional.get(key));
+            let response = null;
+            while (!response && possibleSets.length) {
+                const index = Math.floor(Math.random() * possibleSets.length);
+                response = possibleSets[index].getRandom();
+                if (!response) possibleSets.splice(index, 1);
+            }
+            if (response) {
+                const message = this._processMessage(response.string);
+                if (message) {
+                    this._processAndAddToQueue(message, defaultOptions);
+                    this._respondedByCondition++;
+                    added = true;
                 }
             }
+        }
+
+        // Добавляем в очередь новый первичный ответ, если бот не занят
+        if (!added && ready) {
+            this._processAndAddToQueue(this._getMessage("primary"), defaultOptions);
+            added = true;
+        }
+
+        // Добавляем вторичные ответы
+        if (added && allowSecondary) while (Math.random() < AggroBot.PROBABILITY_SECONDARY) {
+            this._processAndAddToQueue(this._getMessage("secondary"), {
+                readDelay: AggroBot.TIME_ADDITIONAL_READ_DELAY,
+                interruptOnTyping: false,
+                discardOnMessage: true
+            });
         }
 
     }
@@ -317,6 +488,11 @@ const AggroBot = class {
     onMessageReady() {}
 
     /**
+     * Вызывается, когда нужно отправить изображение от бота
+     */
+    onImageReady() {}
+
+    /**
      * Вызывается, когда бот инициирует завершение чата
      */
     onConversationFinish() {}
@@ -333,12 +509,13 @@ const AggroBot = class {
     _setQueueUpdated() {
 
         // Ничего не делаем, если бот уже читает запрос или пишет ответ
-        if (this._readTimeout || this._typeTimeout) return;
+        if (this._readTimeout || this._typeTimeout || this._interruptedTimeout) return;
 
         // Если очередь не пустая, запускаем таймер чтения последнего сообщения.
         // Иначе запускаем таймер неактивности собеседника.
         const queued = this._responseQueue[0];
         if (queued) this._readTimeout = setTimeout(this._setReadingFinished.bind(this), queued.readDelay);
+        else if (this._intendsToLeave) setTimeout(this.onConversationFinish.bind(this), 100);
         else this._resetInactiveTimeout();
 
     }
@@ -351,8 +528,9 @@ const AggroBot = class {
 
         this._readTimeout = null;
         this._typingStartedTime = Date.now();
-        this.onTypingStart();
-        this._typeTimeout = setTimeout(this._setTypingFinished.bind(this), this._responseQueue[0].typeDelay);
+        const typeDelay = this._responseQueue[0].typeDelay;
+        if (typeDelay) this.onTypingStart();
+        this._typeTimeout = setTimeout(this._setTypingFinished.bind(this), typeDelay);
 
     }
 
@@ -364,7 +542,17 @@ const AggroBot = class {
 
         this._typeTimeout = null;
         this.onTypingFinish();
-        this.onMessageReady(this._responseQueue.shift().message);
+
+        const queued = this._responseQueue.shift();
+        switch (queued.contentType) {
+            case AggroBot.QueuedResponse.ContentType.TEXT:
+                this.onMessageReady(queued.message);
+                this._spamDetector.storeOutput(queued.message);
+                break;
+            case AggroBot.QueuedResponse.ContentType.IMAGE:
+                this.onImageReady(queued.imageURL);
+                break;
+        }
         this._directResponse = false;
         this._setQueueUpdated();
 
@@ -372,7 +560,7 @@ const AggroBot = class {
 
     /**
      * Запускает таймер, который, если во время его активности собеседник не был активен, увеличивает счётчик тиков
-     * неактивности.
+     * неактивности по его истечении.
      * При каждом прибавлении бот выполняет действия, направленные на привлечение внимания собеседника.
      * Если собеседник неактивен несколько тиков подряд, соединение разрывается.
      * @private
@@ -380,8 +568,9 @@ const AggroBot = class {
     _resetInactiveTimeout() {
 
         clearTimeout(this._activityCheckTimeout);
-        this._activityCheckTimeout = setTimeout(() => {
+        if (!this._intendsToLeave) this._activityCheckTimeout = setTimeout(() => {
             this._activityCheckTimeout = null;
+            if (this._ignoringPrepareRequests) return this._resetInactiveTimeout();
             switch (++this._inactivityCounter) {
                 case 1:
                     this.prepareResponse();
@@ -392,8 +581,12 @@ const AggroBot = class {
                         discardOnMessage: true
                     });
                     break;
-                default:
-                    this.onConversationFinish();
+                case 4:
+                    this._intendsToLeave = true;
+                    this._processAndAddToQueue(this._getMessage("before_leaving"), {
+                        discardOnMessage: true
+                    });
+                    break;
             }
         }, AggroBot.TIME_INCREMENT_INACTIVE_COUNTER);
 
@@ -408,6 +601,23 @@ const AggroBot = class {
 
         this._responseQueue.push(queued);
         this._setQueueUpdated();
+
+    }
+
+    /**
+     * Отменяет подготовку к отправке следующего ответа в очереди
+     * @private
+     */
+    _removeNextQueuedResponse() {
+
+        this._responseQueue.shift();
+        clearTimeout(this._readTimeout);
+        clearTimeout(this._typeTimeout);
+        clearTimeout(this._interruptedTimeout);
+        this._readTimeout = null;
+        this._typeTimeout = null;
+        this._interruptedTimeout = null;
+        this._resetInactiveTimeout();
 
     }
 
@@ -461,17 +671,30 @@ const AggroBot = class {
     }
 
     /**
-     * Возвращает случайное сообщение из базы сообщений по ключу
+     * Возвращает случайное необработанное сообщение из базы сообщений по ключу
      * @param {string} databaseKey
      * @returns {string}
      * @private
      */
-    _getMessage(databaseKey) {
+    _getRawMessage(databaseKey) {
 
-        // Парсим функции и флаги внутри сообщения
-        // Временно: удаляем $
-        let retry = false;
-        let message = this._database.getRandom(databaseKey).string;
+        const response = this._database.getRandom(databaseKey);
+        return response && response.string;
+
+    }
+
+    /**
+     * Обрабатывает функции и флаги внутри строки
+     * @param {string} message
+     * @param {Array<string>} matches Массив совпадений для %m
+     * @returns {string | null}
+     * @private
+     */
+    _processMessage(message, matches = []) {
+
+        if (message == null) return null;
+
+        let invalid = false;
         message = message.replace(/%(\w+)(?:\(([^,)]*(?:,[^,)]*)*)\))?/g, (_, name, args) => {
 
             args = args ? args.split(",") : [];
@@ -487,20 +710,99 @@ const AggroBot = class {
                     return (this._userProfile.gender === AggroBot.UserProfile.Gender.MALE ? args[0] : args[1]) || "";
                 case "d":
                 case "direct":
-                    if (!this._directResponse) retry = true;
+                    if (!this._directResponse) invalid = true;
                     break;
                 case "nd":
                 case "nondirect":
-                    if (this._directResponse) retry = true;
+                    if (this._directResponse) invalid = true;
                     break;
+                case "firstname":
+                    return AggroBot.firstName.toLowerCase();
+                case "lastname":
+                    return AggroBot.lastName.toLowerCase();
+                case "shortname":
+                    return AggroBot.shortName.toLowerCase();
+                case "m":
+                case "match":
+                    return (matches[+(args[0] || 0)] || "").toLowerCase();
+                case "ifm":
+                case "ifmatch":
+                    invalid = !matches[+args[0]];
+                    break;
+                case "ifnm":
+                case "ifnomatch":
+                    invalid = !!matches[+args[0]];
+                    break;
+                case "timeschedule": {
+                    const to12HourFormat = hours => hours % 12 || 12;
+                    const toFullHourFormat = hours => {
+                        const hours12 = to12HourFormat(hours);
+                        return hours12 == 1 ? "час" : `${hours12} час${hours12 < 5 ? "а" : "ов"}`;
+                    };
+                    const now = new Date();
+                    const minutes = now.getMinutes();
+                    const hours = now.getHours();
+                    if (minutes <= 15) return toFullHourFormat(hours);
+                    if (minutes < 45) return `${minutes <= 25 ? "почти" : ""} пол ${to12HourFormat(hours + 1)}`;
+                    return "почти " + toFullHourFormat(hours + 1);
+                }
+                case "timehour": {
+                    const now = new Date();
+                    return (now.getHours() + (now.getMinutes() > 25)) % 24 || 12;
+                }
+                case "timeofday": {
+                    const now = new Date();
+                    const hours = now.getHours() + now.getMinutes() / 100;
+                    if (hours < 5.30 || hours > 23.30) return "посреди ночи";
+                    if (hours < 12) return "с утра";
+                    if (hours < 18) return "посреди дня";
+                    return "весь вечер";
+                }
+                case "timedayofweek":
+                    return ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"][new Date().getDay()];
+                default:
+                    if (typeof this._variables[name] === "string") return this._variables[name];
+                    else if (typeof this._variables[name] === "function") return this._variables[name].apply(this, args);
             }
 
             return "";
 
         }).replace(/[$@]\w+/g, "");
+        return !invalid ? message : null;
 
-        if (retry) return this._getMessage(databaseKey);
-        return message;
+    }
+
+    /**
+     * Возвращает случайное сообщение из базы сообщений по ключу
+     * @param {string} databaseKey
+     * @returns {string}
+     * @private
+     */
+    _getMessage(databaseKey) {
+
+        const message = this._processMessage(this._getRawMessage(databaseKey));
+        return message != null ? message : this._getMessage(databaseKey);
+
+    }
+
+    /**
+     * По возможности возвращает ответ на сообщение по регулярному выражению
+     * @param {string} request
+     * @returns {{message: string | null, pattern: RegExp | null}}
+     * @private
+     */
+    _getAnswer(request) {
+
+        const {response, matches, pattern} = this._database.match(request);
+        let message = null;
+
+        // Отменяем ответ по регулярному выражению, если ответ на это же самое выражение уже есть в очереди
+        if (response != null && !this._responseQueue.some(queued => queued.pattern === pattern)) {
+            message = this._processMessage(response.string, matches);
+            if (message == null) return this._getAnswer(request);
+        }
+
+        return {message, pattern};
 
     }
 
@@ -525,6 +827,12 @@ const AggroBot = class {
      */
     _prepareQueuedResponses(message, queuedResponseOptions = {}) {
 
+        // Добавляем в конец фразы слово из набора addition
+        if (!/\?$/.test(message) && Math.random() < this._style.additionProbability) {
+            message += (Math.random() < this._style.additionLineBreakProbability ? " // " : " ") +
+                this._getMessage("addition");
+        }
+
         // Обрабатываем разбиения
         const splitResult = [];
         message.split(" // ").forEach(part => {
@@ -543,8 +851,57 @@ const AggroBot = class {
                 else buffer += " " + part;
             });
             // noinspection JSUnusedAssignment
-            push(buffer);
+            push(buffer.trim());
         });
+        
+        // Вставляем слова из специальных наборов
+        splitResult.forEach(queued => {
+            const wordRegExp = AggroBot.Style.wordRegExp;
+            wordRegExp.lastIndex = 0;
+            let changed = false;
+            let lastWord = "";
+            queued.message = queued.message.replace(wordRegExp, (match, p1) => {
+                let replacement = match;
+                if (Math.random() < this._style.insideInsertionProbability) {
+                    const word = this._getMessage("insert_inside");
+                    if (p1 != word && lastWord != word && AggroBot.Style.PREPOSITIONS_OR_CONJUNCTIONS.indexOf(lastWord) == -1) {
+                        replacement = `${word} ${match}`;
+                        changed = true;
+                    }
+                    else console.log(`@@@ Not inserting because ${p1} or ${lastWord} == ${word} or ${lastWord} is a prop or conj`);
+                }
+                lastWord = p1;
+                return replacement;
+            });
+            if (Math.random() < this._style.afterInsertionProbability) {
+                queued.message = queued.message.replace(/[^а-яё\d]*$/, ` ${this._getMessage("insert_after")}$&`);
+                changed = true;
+            }
+            if (changed) queued.calculateTypeDelay();
+        });
+
+        // Добавляем ошибки
+        splitResult.forEach(queued => queued.message = this._style.misspell(queued.message));
+
+        // Умножаем количество вопросительных и восклицательных знаков
+        for (let i = splitResult.length - 1; i >= 0; i--) {
+            const queued = splitResult[i];
+            if (!/[!?]$/.test(queued.message)) continue;
+            while (Math.random() < this._style.questionMarkDuplicationProbability) {
+                queued.message += queued.message.slice(-1);
+            }
+            queued.message = queued.message.replace(/[!?]+$/, match => {
+                if (Math.random() > this._style.questionMarkLineBreakProbability) return match;
+                const marksQueued = new AggroBot.QueuedResponse(match);
+                marksQueued.readDelay = AggroBot.TIME_ADDITIONAL_READ_DELAY;
+                marksQueued.interruptOnTyping = false;
+                marksQueued.interruptOnMessage = false;
+                marksQueued.discardOnMessage = !!queuedResponseOptions.discardOnMessage;
+                marksQueued.blockQueue = false;
+                splitResult.splice(i + 1, 0, marksQueued);
+                return "";
+            });
+        }
 
         // Вставляем опечатки
         let typosResult = [];
@@ -589,10 +946,10 @@ const AggroBot = class {
     _determineGender(message) {
 
         let gender;
-        if (/(^|[^а-яё])(я?([жд]|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)|я\s+[а-яё]{3,}ая?)($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я\s+не\s+([мmп]|парень?|пацан|мальчик|муж(ик|чина)?)($|[^а-яё])|((я|меня)\s+|^)(Александра|Алина|Алиса|Алла|Анастасия|Настя|Анна|Аня|Адель|Валерия|Вера|Виктория|Вика|Галя|Дарья|Даша|Диана|Ева|Евгения|Екатерина|Катя|Елена|Лена|Елизавета|Лиза|Ира|Ирина|Карина|Кира|Кристина|Ксения|Ксюша|Лариса|Лида|Лилия|Люба|Людмила|Люда|Маргарита|Рита|Марина|Мария|Маша|Милена|Надежда|Надя|Наталья|Наташа|Ника|Нина|Оксана|Олеся|Ольга|Оля|Полина|Светлана|Света|Софья|Соня|Татьяна|Таня|Ульяна|Юлия|Юля|Яна)[^а-яё?]/i.test(message)) {
+        if (/((^[^а-яё]*я? ?|([^а-я]|^)я ([а-яё]+[ \-])*)([жд](?=$|\s?[.,])|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)|(^|[^а-яё])я [а-яё]{3,}(ая|[кл]а))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я (ведь )?не (м|парень?|пацан|мальчик|муж(ик|чина)?|чувак)($|[^а-яё])|((я|меня) |^)(Александра|Алина|Алиса|Алла|Аля|Анастасия|Настя|Анна|Аня|Адель|Валерия|Вера|Виктория|Вика|Галя|Дарья|Даша|Диана|Ева|Евгения|Екатерина|Катя|Катюша|Елена|Лена|Ленка|Лера|Елизавета|Лиза|Элиза|Ира|Ирина|Ирочка|Карина|Кира|Кристина|Ксения|Ксюша|Лариса|Лида|Лидия|Лилия|Лиля|Люба|Людмила|Люда|Людочка|Маргарита|Марго|Рита|Марина|Мария|Маша|Милена|Мила|Надежда|Надя|Наталья|Наташа|Ната|Ника|Нина|Оксана|Олеся|Ольга|Оля|Полина|Поля|Светлана|Света|Светка|Софья|Софа|Соня|Татьяна|Таня|Танюша|Ульяна|Уля|Юлия|Юля|Юлька|Яна)([^а-яё?]|$)/i.test(message)) {
             gender = AggroBot.UserProfile.Gender.FEMALE;
         }
-        else if (/(^|[^а-яё])(я?([мmп]|парень?|пацан|мальчик|муж(ик|чина)?)|я\s+[а-яё]{2,}(ый|л))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я\s+не\s+([жд]|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)($|[^а-яё])|((я|меня)\s+|^)(Александр|Алексей|Леша|Леха|Андрей|Антон|Артем|Артур|Ваня|Василий|Вася|Виктор|Витя|Виталий|Владимир|Вова|Влад|Глеб|Григорий|Гриша|Даниил|Данила|Денис|Дмитрий|Дима|Евгений|Егор|Иван|Игорь|Илья|Кирилл|Костя|Макс|Матвей|Михаил|Миша|Никита|Николай|Коля|Олег|Павел|Паша|Рома|Семен|Сема|Сергей|Стас|Тимур|Юрий|Юра)[^а-яё?]/i.test(message)) {
+        else if (/((^[^а-яё]*я? ?|([^а-я]|^)я ([а-яё]+[ \-])*)(м|парень?|пацан|мальчик|муж(ик|чина)?)|(^|[^а-яё])я [а-яё]{2,}(ый|л))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я (ведь )?не ([жд]|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)($|[^а-яё])|((я|меня) |^)(Александр|Саша|Алексей|Леша|Леха|Андрей|Антон|Тоха|Артем|Артур|Ваня|Василий|Вася|Виктор|Витя|Виталий|Владимир|Вова|Влад|Глеб|Григорий|Георгий|Гриша|Данил|Даниил|Данила|Денис|Дмитрий|Дима|Евгений|Женя|Егор|Иван|Игорь|Илья|Илюха|Кирилл|Костя|Макс|Максим|Матвей|Михаил|Миша|Миха|Никита|Николай|Коля|Колян|Олег|Павел|Паша|Рома|Роман|Семен|Сема|Сергей|Сережа|Стас|Тимур|Юрий|Юра)([^а-яё?]|$)/i.test(message)) {
             gender = AggroBot.UserProfile.Gender.MALE;
         }
 
@@ -611,12 +968,20 @@ const AggroBot = class {
 Object.assign(AggroBot, {
 
     /**
-     * Возвращает время, необходимое для чтения сообщения, мс
-     * @param {string} message
+     * Возвращает время, необходимое для чтения запроса, мс
+     * @param {AggroBot.Request} request
      * @returns {number}
      */
-    getTimeToRead(message) {
-        return 850 + 350 * (message + " ").match(/\s+/g).length;
+    getTimeToRead(request) {
+        if (request == null) return 0;
+        switch (request.type) {
+            case AggroBot.Request.Type.TEXT:
+                return 850 + 350 * (request.text + " ").match(/\s/g).length;
+            case AggroBot.Request.Type.PHOTO:
+                return 3500;
+            case AggroBot.Request.Type.STICKER:
+                return 2200;
+        }
     },
 
     /**
@@ -627,6 +992,11 @@ Object.assign(AggroBot, {
     getTimeToType(message) {
         return 500 + 210 * message.length;
     },
+
+    /**
+     * Время, в течение которого бот делает фотографию
+     */
+    TIME_TO_MAKE_PHOTO: 8000,
 
     /**
      * Время, на которое бот прерывается, когда замечает, что собеседник печатает, мс
@@ -664,8 +1034,124 @@ Object.assign(AggroBot, {
      */
     getSplitProbabilityByCurrentPart(message) {
         return 2 / (1 + Math.exp(-0.044 * message.length)) + 1;
+    },
+
+    /**
+     * Возвращает вероятность вставки условного ответа в зависимости от количества уже отправленных таких ответов
+     * @param amountOfResponses
+     * @returns {number}
+     */
+    getConditionalResponseProbability(amountOfResponses) {
+        return 1 / (50 * (amountOfResponses + 1));
+    },
+
+    /**
+     * Функции, проверящие, удовлетворены ли определённые условия отправки условных фраз
+     */
+    satisfiesCondition: {
+
+        "time_late": () => {
+            const hour = new Date().getHours();
+            return hour <= 5 || hour >= 23;
+        },
+
+        "time_before_school": () => {
+            const now = new Date();
+            const month = now.getMonth(), day = now.getDate(), dayOfWeek = now.getDay();
+            if (month == 5 || month == 6 || month == 4 && day >= 20 || month == 7 && day <= 20 ||
+                    month == 11 && day >= 20 || month == 0 && day < 7 || dayOfWeek == 6) return false;
+            const hour = now.getHours();
+            return dayOfWeek != 5 && hour >= 19 || dayOfWeek != 0 && hour <= 8;
+        },
+
+        "time_school_day": (dayOffset = 0) => {
+            const now = new Date(Date.now() + dayOffset * 24 * 60 * 60 * 1000);
+            const month = now.getMonth(), day = now.getDate(), dayOfWeek = now.getDay();
+            return !(month == 5 || month == 6 || month == 7 || month == 4 && day >= 20 ||
+                    month == 11 && day >= 20 || month == 0 && day < 7 || dayOfWeek == 0 || dayOfWeek == 6);
+        },
+
+        "time_after_school": () => {
+            const hour = new Date().getHours();
+            return AggroBot.satisfiesCondition["time_school_day"]() && hour >= 15 && hour <= 18;
+        },
+
+        "time_during_school_hours": () => {
+            const hour = new Date().getHours();
+            return AggroBot.satisfiesCondition["time_school_day"]() && hour >= 9 && hour < 15;
+        },
+
+        "time_school_tomorrow": () => {
+            return AggroBot.satisfiesCondition["time_school_day"](1);
+        }
+
+    },
+
+    /**
+     * Внутреннее имя бота
+     */
+    firstName: "Антон",
+
+    /**
+     * ... фамилия бота
+     */
+    lastName: "Васютин",
+
+    /**
+     * ... короткое имя бота
+     */
+    shortName: "Тоха",
+
+    /**
+     * Ссылка на фото, которое бот будет отправлять в чат
+     */
+    selfieURL: "https://s17.postimg.org/wv15aam4f/image.jpg"
+
+});
+
+/**
+ * Представляет запрос боту
+ * @class
+ */
+AggroBot.Request = class {
+
+    /**
+     * @constructor
+     * @param {number} type Тип контента запроса
+     */
+    constructor(type) {
+
+        /**
+         * Тип контента запроса
+         * @type {number}
+         */
+        this.type = type;
+
+        switch (type) {
+            case AggroBot.Request.Type.TEXT:
+                this.text = "";
+                break;
+            case AggroBot.Request.Type.PHOTO:
+                this.photoURL = null;
+                break;
+            case AggroBot.Request.Type.STICKER:
+                this.stickerGroupName = null;
+                break;
+        }
+
     }
 
+};
+
+/**
+ * Тип контента запроса
+ * @enum
+ * @readonly
+ */
+AggroBot.Request.Type = Object.freeze({
+    TEXT: 0,
+    PHOTO: 1,
+    STICKER: 2
 });
 
 /**
@@ -676,27 +1162,46 @@ AggroBot.QueuedResponse = class {
 
     /**
      * @constructor
-     * @param {string} message
+     * @param {string} content Содержимое ответа
+     * @param {number} contentType Тип содержимого
      */
-    constructor(message) {
+    constructor(content, contentType = AggroBot.QueuedResponse.ContentType.TEXT) {
 
         /**
-         * Сообщение
-         * @type {string}
+         * Тип содержимого
+         * @type {number}
          */
-        this.message = message;
+        this.contentType = contentType;
+
+        switch (contentType) {
+
+            case AggroBot.QueuedResponse.ContentType.TEXT:
+
+                /**
+                 * Сообщение
+                 * @type {string}
+                 */
+                this.message = content;
+
+                break;
+
+            case AggroBot.QueuedResponse.ContentType.IMAGE:
+
+                /**
+                 * Ссылка на изображение
+                 * @type {string}
+                 */
+                this.imageURL = content;
+
+                break;
+
+        }
 
         /**
          * Время, необходимое для чтения запроса
          * @type {number}
          */
         this.readDelay = 0;
-
-        /**
-         * Время, необходимое для печати ответа
-         * @type {number}
-         */
-        this.typeDelay = AggroBot.getTimeToType(message);
 
         /**
          * Флаг: будет ли чтение или набор прервано новым сообщением от собеседника
@@ -722,9 +1227,55 @@ AggroBot.QueuedResponse = class {
          */
         this.blockQueue = true;
 
+        /**
+         * Шаблон, по которому найден ответ
+         * @type {*}
+         */
+        this.pattern = null;
+
+        /**
+         * Флаг: является ли ответ ответом на флуд/спам
+         * @type {boolean}
+         */
+        this.isSpamResponse = false;
+
+        /**
+         * Время, необходимое для печати ответа
+         * @type {number}
+         */
+        this.typeDelay = 0;
+
+        this.calculateTypeDelay();
+
+    }
+
+    /**
+     * Считает время, необходимое для печати ответа
+     */
+    calculateTypeDelay() {
+
+        switch (this.contentType) {
+            case AggroBot.QueuedResponse.ContentType.TEXT:
+                this.typeDelay = AggroBot.getTimeToType(this.message);
+                break;
+            case AggroBot.QueuedResponse.ContentType.IMAGE:
+                this.typeDelay = 0;
+                break;
+        }
+
     }
 
 };
+
+/**
+ * Тип содержимого ответа в очереди
+ * @enum
+ * @readonly
+ */
+AggroBot.QueuedResponse.ContentType = Object.freeze({
+    TEXT: 0,
+    IMAGE: 1
+});
 
 /**
  * База сообщений бота
@@ -732,13 +1283,41 @@ AggroBot.QueuedResponse = class {
  */
 AggroBot.Database = class {
 
+    constructor() {
+
+        /**
+         * @type {Array<AggroBot.Matcher>}
+         */
+        this.answers = [];
+
+        /**
+         * @type {Map<string, AggroBot.ResponseSet>}
+         */
+        this.conditional = new Map();
+
+    }
+
     /**
      * Генерирует новое состояние базы сообщений
      */
     reset() {
 
         // noinspection JSCheckFunctionSignatures
-        Object.keys(this).forEach(key => this[key].reset());
+        Object.keys(this).forEach(key => this.has(key) && this[key].hardReset());
+
+        this.answers.forEach(matcher => matcher.responses.hardReset());
+        this.conditional.forEach(set => set.hardReset());
+
+    }
+
+    /**
+     * Определяет, есть ли в базе сообщений множество ответов с данным ключом
+     * @param {string} key
+     * @returns {boolean}
+     */
+    has(key) {
+
+        return this[key] instanceof AggroBot.ResponseSet;
 
     }
 
@@ -750,6 +1329,26 @@ AggroBot.Database = class {
     getRandom(key) {
 
         return this[key].getRandom();
+
+    }
+
+    /**
+     * Возвращает случайный ответ по регулярному выражению с массивом совпадений в запоминающих скобках
+     * @param {string} message
+     * @returns {{matches: Array<string> | null, response: AggroBot.Response | null, pattern: RegExp | null}} случайный ответ и массив совпадений
+     */
+    match(message) {
+
+        for (let matcher of this.answers) {
+            const {response, matches, pattern} = matcher.match(message);
+            if (response) return {response, matches, pattern};
+        }
+
+        return {
+            response: null,
+            matches: null,
+            pattern: null
+        };
 
     }
 
@@ -765,10 +1364,43 @@ Object.assign(AggroBot.Database, {
     fromRaw(raw) {
 
         const database = new AggroBot.Database();
-        Object.keys(raw).forEach(key => {
+        Object.keys(raw).filter(key => Array.isArray(raw[key])).forEach(key => {
             const set = new AggroBot.ResponseSet();
-            raw[key].forEach(string => set.add(new AggroBot.Response(new String(string))));
+            const isSticker = key.indexOf("sticker_") == 0;
+            raw[key].forEach(string => {
+                const response = new AggroBot.Response(new String(string));
+                if (isSticker) response.unique = true;
+                set.add(response);
+            });
             database[key] = set;
+        });
+
+        if (typeof raw.answers === "object") Object.keys(raw.answers).forEach(regExpStr => {
+            const set = new AggroBot.ResponseSet();
+            raw.answers[regExpStr].forEach(string => {
+                const response = new AggroBot.Response(new String(string));
+                response.unique = true;
+                set.add(response);
+            });
+            let regExp;
+            try {
+                regExp = new RegExp(regExpStr, "i");
+            }
+            catch (error) {
+                console.log("Invalid regular expression in answers: ", regExpStr);
+                return;
+            }
+            database.answers.push(new AggroBot.Matcher(regExp, set));
+        });
+
+        if (typeof raw.conditional === "object") Object.keys(raw.conditional).forEach(key => {
+            const set = new AggroBot.ResponseSet();
+            raw.conditional[key].forEach(string => {
+                const response = new AggroBot.Response(new String(string));
+                response.unique = true;
+                set.add(response);
+            });
+            database.conditional.set(key, set);
         });
 
         return database;
@@ -783,12 +1415,16 @@ Object.assign(AggroBot.Database, {
     fromAnother(anotherDatabase) {
 
         const database = new AggroBot.Database();
+
         // noinspection JSCheckFunctionSignatures
-        Object.keys(anotherDatabase).forEach(key => {
-            const set = new AggroBot.ResponseSet();
-            anotherDatabase[key].forEach(response => set.add(new AggroBot.Response(response.string)));
-            database[key] = set;
-        });
+        Object.keys(anotherDatabase).filter(key => anotherDatabase.has(key)).forEach(key =>
+            database[key] = anotherDatabase[key].clone());
+
+        anotherDatabase.answers.forEach(matcher =>
+            database.answers.push(new AggroBot.Matcher(matcher.regExp, matcher.responses.clone())));
+
+        anotherDatabase.conditional.forEach((set, key) =>
+            database.conditional.set(key, set.clone()));
 
         return database;
 
@@ -834,9 +1470,19 @@ AggroBot.ResponseSet = class {
     }
 
     /**
-     * Генерирует новое состояние ответов
+     * Сбрасывает флаг использованности ответов, если они не уникальные
      */
     reset() {
+
+        this._totalAvailable = 0;
+        this.forEach(response => !response.unique && ++this._totalAvailable && (response.used = false));
+
+    }
+
+    /**
+     * Генерирует новое состояние ответов
+     */
+    hardReset() {
 
         this._totalAvailable = this._array.length;
         this.forEach(response => response.used = false);
@@ -849,18 +1495,37 @@ AggroBot.ResponseSet = class {
      */
     getRandom() {
 
+        if (!this._totalAvailable) {
+            this.reset();
+            if (!this._totalAvailable) return null;
+        }
+
         const index = Math.floor(Math.random() * this._totalAvailable);
         let counter = 0;
         for (let response of this._array) if (!response.used) {
             if (index == counter) {
                 response.used = true;
+                this._totalAvailable--;
                 return response;
             }
             counter++;
         }
 
-        this.reset();
-        return this.getRandom();
+    }
+
+    /**
+     * Копирует множество ответов, не сохраняя только состояние использованности
+     * @returns {AggroBot.ResponseSet}
+     */
+    clone() {
+
+        const set = new AggroBot.ResponseSet();
+        this.forEach(response => {
+            const newResponse = new AggroBot.Response(response.string);
+            if (response.unique) newResponse.unique = true;
+            set.add(newResponse);
+        });
+        return set;
 
     }
 
@@ -889,6 +1554,43 @@ AggroBot.Response = class {
          * @type {boolean}
          */
         this.used = false;
+
+        /**
+         * Уникальный ли ответ
+         * @type {boolean}
+         */
+        this.unique = false;
+
+    }
+
+};
+
+AggroBot.Matcher = class {
+
+    /**
+     * @constructor
+     * @param {RegExp} regExp
+     * @param {AggroBot.ResponseSet} responses
+     */
+    constructor(regExp, responses) {
+
+        this.regExp = regExp;
+        this.responses = responses;
+
+    }
+
+    /**
+     * Выполняет поиск в строке по регулярному выражению
+     * @param {string} string
+     * @returns {{matches: null | Array<string>, response: AggroBot.Response | null, pattern: RegExp | null}} случайный ответ и массив совпадений
+     */
+    match(string) {
+
+        const pattern = this.regExp;
+        const matches = string.match(pattern);
+        let response = null;
+        if (matches) response = this.responses.getRandom();
+        return {response, matches, pattern};
 
     }
 
@@ -947,6 +1649,10 @@ AggroBot.Style = class {
         this.mishitTypoProbability = Math.random() * (1 - this.swapTypoProbability);
         this.alterTypoProbability = 1 - this.swapTypoProbability - this.mishitTypoProbability;
 
+        /**
+         * Вероятность исправления опечатки в последующем сообщении
+         * @type {number}
+         */
         this.typoCorrectionProbabilityMultiplier = Math.pow(Math.random(), 1 / 4);
 
         /**
@@ -954,6 +1660,93 @@ AggroBot.Style = class {
          * @type {boolean}
          */
         this.capitalize = Math.random() < AggroBot.Style._PROBABILITY_CAPITALIZE;
+
+        /**
+         * Вероятности допуска ошибок разных типов
+         * @type {Object}
+         */
+        this.misspellProbability = {
+
+            // Ошибка типа 0: замена а <-> о, и <-> е
+            // От 0 до 0.4
+            0: Math.pow(2, 9 * Math.random() - 11.4),
+
+            // Ошибка типа 1: -тся/-ться
+            1: AggroBot.Style._getTwoOptionProbability(0.15, 0.5),
+
+            // Ошибка типа 2: -ишь, -ешь
+            2: AggroBot.Style._getTwoOptionProbability(0.75, 0.375),
+
+            // Ошибка типа 3: мягкий знак после шипящих
+            3: AggroBot.Style._getTwoOptionProbability(0.07, 0.6),
+
+            // Ошибка типа 4: жи, ши, ча, ща, чу, щу
+            4: AggroBot.Style._getTwoOptionProbability(0.07143, 0.7),
+
+            // Ошибка типа 5: -чк-, -чн-
+            5: AggroBot.Style._getTwoOptionProbability(0.2, 0.55),
+
+            // Ошибка типа 6: не- слитно/раздельно
+            6: AggroBot.Style._getTwoOptionProbability(0.1, 0.5),
+
+            // Ошибка типа 7: нн <-> н
+            7: AggroBot.Style._getTwoOptionProbability(0.1, 0.5),
+
+            // Ошибка типа 8: ого -> ова
+            8: AggroBot.Style._getTwoOptionProbability(0.06, 0.8),
+
+            // Ошибка типа 9: шо <-> ше, чо <-> чё, що <-> ще
+            9: Math.random() * 0.8,
+
+            // Стиль типа 10: меня -> мя, тебя -> тя
+            10: AggroBot.Style._getTwoOptionProbability(0.05, 0.5),
+
+            // Стиль типа 11: вообще -> ваще
+            11: AggroBot.Style._getTwoOptionProbability(0.05, 0.5),
+
+            // Двойные согласные
+            12: AggroBot.Style._getTwoOptionProbability(0.175, 0.5),
+
+            // тся/ться -> ца
+            13: AggroBot.Style._getTwoOptionProbability(0.025, 0.85),
+
+        };
+
+        /**
+         * Вероятность того, что восклицательный или вопросительный знак в конце фразы будет в очередной раз повторён
+         * @type {number}
+         */
+        this.questionMarkDuplicationProbability = Math.pow(Math.max((Math.random() - 0.4) / 0.6, 0), 4.5);
+
+        /**
+         * Вероятность переноса восклицательного или вопросительного знака в следующее сообщение
+         * @type {number}
+         */
+        this.questionMarkLineBreakProbability = Math.max(2.5 * (Math.random() - 0.6), 0);
+
+        /**
+         * Вероятность вставки в конец фразы слова из набора addition
+         * @type {number}
+         */
+        this.additionProbability = Math.pow(Math.max((Math.random() - 0.45) / 0.6, 0), 3.7);
+
+        /**
+         * Вероятность написания этого слова в отдельном сообщении
+         * @type {number}
+         */
+        this.additionLineBreakProbability = Math.max(2.5 * (Math.random() - 0.6), 0);
+
+        /**
+         * Вероятность вставки в любое место фразы слова из набора insert_inside
+         * @type {number}
+         */
+        this.insideInsertionProbability = Math.pow(2, 8 * Math.random() - 9.7);
+
+        /**
+         * Вероятность вставки в конец фразы слова из набора insert_after
+         * @type {number}
+         */
+        this.afterInsertionProbability = Math.pow(2, 7 * Math.random() - 8);
 
     }
 
@@ -968,7 +1761,8 @@ AggroBot.Style = class {
         let result = match ? match[0] : "";
         const corrections = [];
 
-        const regExp = /([а-яё]+)([^а-яё]+|$)/ig;
+        const regExp = AggroBot.Style.wordRegExp;
+        regExp.lastIndex = 0;
         let lastCorrected = false;
         let matches;
         while (matches = regExp.exec(string)) {
@@ -1021,10 +1815,106 @@ AggroBot.Style = class {
 
     }
 
+    /**
+     * Вставляет во фразу ошибки на основе стиля
+     * @param {string} string
+     * @returns {string}
+     */
+    misspell(string) {
+
+        // Тип 0
+        {
+            const wordRegExp = AggroBot.Style.wordRegExp;
+            wordRegExp.lastIndex = 0;
+            const letterRegExp = /[аеёиоуыэюя](?=[а-яё])/g;
+            let result = "";
+            let matches;
+            while (matches = wordRegExp.exec(string)) {
+                const part = matches[0];
+                const letters = part.match(letterRegExp);
+                if (!letters || letters.length < 2) { // Пропускаем короткие слова
+                    result += part;
+                    continue;
+                }
+                result += part.replace(letterRegExp, (letter, offset) => {
+                    if ("аоеи".indexOf(letter) == -1 || Math.random() > this.misspellProbability[0]) return letter;
+                    console.log(`misspelling "${part}" with type 0 @ ${offset}`);
+                    switch (letter) {
+                        case "а": return "о";
+                        case "о": return "а";
+                        case "е": return "и";
+                        case "и": return "е";
+                    }
+                });
+            }
+            string = result;
+        }
+
+        // Тип 1–11
+        [
+            /т(ь?)ся(?![а-яё])/g,
+            /([еёи])шь(?![а-яё])/g,
+            /([аоуыэюя][жчшщ])(ь?)(?![а-яё])/g,
+            /[жш]и|[чщ][ау]/g,
+            /ч([кн])/g,
+            /([^а-яё]|^)н([еи])( ?)(?=[а-яё]{3,})/g,
+            /([а-яё]+[аеёиоуыюя])(н+)(?=(?:[ыиао]й|[аоя]я|[аоеи](?:е|го|му)|ик|ица)(?:[^а-яё]|$))/g,
+            /([а-яё]{3,}[аоеи])го(?![а-яё])/g,
+            /([жчшщ])([еёо])(?=[а-чщ-яё])/g,
+            /([^а-яё]|^)([мт])(ен|еб)я(?![а-яё])/g,
+            /в([ао]{1,2})бще/g,
+            /([бвгджзклмпрстфхцчшщ])\1/g,
+            /ть?ся(?![а-яё])/g
+        ].forEach((regExp, index) => {
+            const type = index + 1;
+            string = string.replace(regExp, (...matches) => {
+                if (Math.random() > this.misspellProbability[type]) return matches[0];
+                console.log(`misspelling "${string}" with type ${type} @ ${matches[matches.length - 2]}`);
+                switch (type) {
+                    case 1:
+                        return "т" + (matches[1] ? "" : "ь") + "ся";
+                    case 2:
+                        return matches[1] + "ш";
+                    case 3:
+                        return matches[1];
+                    case 4:
+                        const letter = matches[0].charAt(1);
+                        return matches[0].charAt(0) + (letter == "и" ? "ы" : letter == "а" ? "я" : "ю");
+                    case 5:
+                        return "чь" + matches[1];
+                    case 6:
+                        return matches[1] + "н" + matches[2] + (matches[3] ? "" : " ");
+                    case 7:
+                        return matches[1] + (matches[2].length == 1 ? "нн" : "н");
+                    case 8:
+                        return matches[1] + "ва";
+                    case 9:
+                        return matches[1] + (matches[2] == "е" || matches[2] == "ё" ? "о" : "е");
+                    case 10:
+                        return matches[1] + matches[2] + "я";
+                    case 11:
+                        return "ваще";
+                    case 12:
+                        return matches[1];
+                    case 13:
+                        return "ца";
+                }
+            });
+        });
+
+        return string;
+
+    }
+
 };
 
 // noinspection NonAsciiCharacters
 Object.assign(AggroBot.Style, {
+
+    /**
+     * Регулярное выражение для поиска слов
+     */
+    wordRegExp: /([а-яё\d]+)([^а-яё\d]+|$)/ig,
 
     /**
      * Возможные подмены букв с целью симуляции опечатки
@@ -1058,9 +1948,310 @@ Object.assign(AggroBot.Style, {
      * Вероятность установки заглавной буквы во всех вразах
      * @private
      */
-    _PROBABILITY_CAPITALIZE: 2 / 3
+    _PROBABILITY_CAPITALIZE: 2 / 3,
+
+    /**
+     * Получает очень малую или очень большую вероятность, являющуюся результатом
+     * кусочно-линейной функции с наклоном slope и точкой разрыва balance
+     * @param {number} slope
+     * @param {number} balance
+     * @returns {number}
+     * @private
+     */
+    _getTwoOptionProbability(slope, balance) {
+        const random = Math.random();
+        return slope * random + (random <= balance ? 0 : 1 - slope);
+    },
+
+    /**
+     * Предлоги или союзы, после которых не может быть вставлено слово
+     */
+    PREPOSITIONS_OR_CONJUNCTIONS: [
+        "без", "в", "вне", "во", "вроде", "возле", "внутрь", "внутри", "вокруг", "для", "до", "за", "из",
+        "к", "кроме", "ко", "между", "мимо", "на", "над", "надо", "о", "об", "обо", "около", "от", "ото",
+        "перед", "передо", "по", "под", "подо", "после", "при", "про", "против", "ради", "с", "среди", "сзади",
+        "снизу", "у", "а", "даже", "если", "и", "или", "как", "когда", "но", "пока", "пусть", "тоже", "не", "ни"
+    ]
 
 });
+
+/**
+ * Представляет детектор флуда в последовательности сообщений
+ * @class
+ */
+AggroBot.SpamDetector = class {
+
+    /**
+     * @constructor
+     */
+    constructor() {
+
+        /**
+         * Состояние детектора
+         * @type {number}
+         */
+        this.state = AggroBot.SpamDetector.State.ANALYZING;
+
+        /**
+         * Буфер входящих сообщений
+         * @type {Array<AggroBot.Request>}
+         * @private
+         */
+        this._buffer = [];
+
+        /**
+         * Буфер исходящих текстовых сообщений
+         * @type {Array<string>}
+         * @private
+         */
+        this._outputBuffer = [];
+        
+    }
+
+    /**
+     * Анализирует очередное входящее сообщение
+     * @param {AggroBot.Request} request
+     * @param {boolean} noStateChange
+     * @returns {{result: string | null, variables: object}}
+     */
+    analyzeNext(request, noStateChange = false) {
+        
+        let result = null;
+        let variables = {};
+
+        this._buffer.push(request);
+        if (this._buffer.length > AggroBot.SpamDetector.BUFFER_SIZE) this._buffer.shift();
+
+        if (this._buffer.length >= AggroBot.SpamDetector.MESSAGES_TO_CHECK_SIMPLE) (() => {
+
+            // Проверяем на фразу о прекращении флуда
+            if (this.state === AggroBot.SpamDetector.State.IGNORING &&
+                    request.type === AggroBot.Request.Type.TEXT &&
+                    /надоело|заебала?с|больше не буду/i.test(request.text)) return;
+
+            // Если две последние фразы — не флуд, прекращаем игнорировать
+            const [last1, last2] = this._buffer.slice(-2);
+            if (this.state === AggroBot.SpamDetector.State.IGNORING &&
+                last1.type === AggroBot.Request.Type.TEXT && last2.type === AggroBot.Request.Type.TEXT &&
+                last1.text != last2.text &&
+                [last1, last2].every(request => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(request.text))) return;
+
+            let slice = this._buffer.slice(-AggroBot.SpamDetector.MESSAGES_TO_CHECK_SIMPLE);
+            if (slice.every(request => request.type === AggroBot.Request.Type.TEXT)) {
+
+                slice = slice.map(request => request.text);
+                const joined = slice.join("").toLowerCase();
+
+                // Проверяем на одинаковые символы
+                let first = slice[0].toLowerCase();
+                if (/^(.)\1*$/.test(first) && joined.split("").every(ch => ch == first.charAt(0))) {
+                    first = first.charAt(0);
+                    const characterName = AggroBot.SpamDetector.CHARACTER_NAMES[first];
+                    if (characterName) {
+                        result = "spam_character";
+                        variables["character"] = first;
+                        variables["charactername"] = variation => characterName[variation] || characterName["singular"];
+                        return;
+                    }
+                    else if (/[а-яёa-z]/.test(first)) {
+                        result = "spam_same_letter";
+                        variables["letter"] = first;
+                        return;
+                    }
+                }
+
+                // Проверяем на разные символы
+                if (/^[^а-яё0-9a-z]+$/.test(joined)) return result = "spam_single_symbol";
+
+                // Проверяем на цифры
+                if (/^[0-9]+$/.test(joined)) {
+                    result = "spam_single_letter_or_digit";
+                    variables["letterordigit"] = (letter, digit) => digit;
+                    variables["gletterordigit"] = function(letterMale, digitMale, letterFemale, digitFemale) {
+                        return this._userProfile.gender === AggroBot.UserProfile.Gender.MALE ? digitMale : digitFemale;
+                    };
+                    return;
+                }
+
+                // Проверяем на одиночные буквы
+                if (slice.every(str => /^[а-яёa-z]$/i.test(str))) {
+                    result = "spam_single_letter_or_digit";
+                    variables["letterordigit"] = letter => letter;
+                    variables["gletterordigit"] = function(letterMale, letterFemale) {
+                        return this._userProfile.gender === AggroBot.UserProfile.Gender.MALE ? letterMale : letterFemale;
+                    };
+                    return;
+                }
+
+                // Проверяем на повторы
+                const clean = slice.map(AggroBot.SpamDetector.cleanString);
+                first = clean[0];
+                if (first && clean.every(str => str == first)) return result = "spam_repetition";
+
+                // Проверяем на копирование за ботом
+                if (clean.some(str => str.length > 6) && clean.every(str => this._outputBuffer.some(output =>
+                        AggroBot.SpamDetector.levenshteinDistance(str, output) / Math.min(str.length, output.length) < 0.15))) {
+                    return result = "spam_copying";
+                }
+
+            }
+
+            // Проверяем на бред
+            if (this._buffer.length >= AggroBot.SpamDetector.MESSAGES_TO_CHECK_ADVANCED) {
+                const slice = this._buffer.slice(-AggroBot.SpamDetector.MESSAGES_TO_CHECK_ADVANCED);
+                if (slice.every(request => request.type === AggroBot.Request.Type.TEXT) &&
+                        !slice.some(request => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(request.text))) {
+                    console.log("SPAM_REGULAR: ", JSON.stringify(slice));
+                    return result = "spam_regular";
+                }
+            }
+
+        })();
+
+        // Проверяем на фото и стикеры
+        if (!result && this._buffer.length >= AggroBot.SpamDetector.PHOTOS_CONSIDERED_SPAM &&
+                this._buffer.slice(-AggroBot.SpamDetector.PHOTOS_CONSIDERED_SPAM).every(request =>
+                    request.type === AggroBot.Request.Type.PHOTO)) result = "spam_photo";
+        if (!result && this._buffer.length >= AggroBot.SpamDetector.STICKERS_CONSIDERED_SPAM &&
+                this._buffer.slice(-AggroBot.SpamDetector.STICKERS_CONSIDERED_SPAM).every(request =>
+                    request.type === AggroBot.Request.Type.STICKER)) result = "spam_sticker";
+
+        if (!noStateChange) {
+            if (result) switch (this.state) {
+                case AggroBot.SpamDetector.State.ANALYZING:
+                    this.state = AggroBot.SpamDetector.State.DETECTED_FIRST;
+                    break;
+                case AggroBot.SpamDetector.State.DETECTED_FIRST:
+                    result = "spam_aggressive";
+                    variables = {};
+                    this.state = AggroBot.SpamDetector.State.DETECTED_SECOND;
+                    break;
+                case AggroBot.SpamDetector.State.DETECTED_SECOND:
+                    result = "spam_ignoring";
+                    variables = {};
+                    this.state = AggroBot.SpamDetector.State.IGNORING;
+                    break;
+                case AggroBot.SpamDetector.State.IGNORING:
+                    result = null;
+                    break;
+            }
+            else this.state = AggroBot.SpamDetector.State.ANALYZING;
+        }
+
+        return {result, variables};
+        
+    }
+
+    /**
+     * Сохраняет ответ бота в буфере ответов (для проверки на копирование за ботом)
+     * @param {string} response
+     */
+    storeOutput(response) {
+
+        response = AggroBot.SpamDetector.cleanString(response);
+        if (!response) return;
+        this._outputBuffer.push(response);
+        if (this._outputBuffer.length > AggroBot.SpamDetector.OUTPUT_BUFFER_SIZE) this._outputBuffer.shift();
+
+    }
+    
+};
+
+Object.assign(AggroBot.SpamDetector, {
+    
+    State: {
+        ANALYZING: 0,
+        DETECTED_FIRST: 1,
+        DETECTED_SECOND: 2,
+        IGNORING: 3
+    },
+    
+    BUFFER_SIZE: 4,
+    OUTPUT_BUFFER_SIZE: 12,
+    MESSAGES_TO_CHECK_SIMPLE: 3,
+    MESSAGES_TO_CHECK_ADVANCED: 4,
+    STICKERS_CONSIDERED_SPAM: 2,
+    PHOTOS_CONSIDERED_SPAM: 3,
+
+    cleanString(str) {
+        return str.toLowerCase().replace(/[^а-яёa-z0-9 ]/g, "").trim();
+    },
+
+    levenshteinDistance(str1, str2) {
+
+        if (!str1 || !str2) return (str1 || str2).length;
+
+        const matrix = [];
+        for (let i = 0; i <= str2.length; matrix[i] = [i++]);
+        for (let j = 0; j <= str1.length; matrix[0][j] = j++);
+
+        for (let i = 1; i <= str2.length; i++) for (let j = 1; j <= str1.length; j++) {
+            matrix[i][j] = str2.charAt(i - 1) == str1.charAt(j - 1) ?
+                matrix[i - 1][j - 1] :
+                matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1));
+        }
+
+        return matrix[str2.length][str1.length];
+
+    },
+
+    CHARACTER_NAMES: {
+        "!": {singular: "воскл знак", plural: "воскл знаки", accusative: "воскл знак"},
+        "\"": {singular: "кавычка", plural: "кавычки", accusative: "кавычку"},
+        "#": {singular: "решетка", plural: "решетки", accusative: "решетку"},
+        "$": {singular: "доллар", plural: "доллары", accusative: "доллар"},
+        "%": {singular: "процент", plural: "проценты", accusative: "процент"},
+        "&": {singular: "энд", plural: "энды", accusative: "энд"},
+        "'": {singular: "кавычка", plural: "кавычки", accusative: "кавычку"},
+        "(": {singular: "скобка", plural: "скобки", accusative: "скобку"},
+        ")": {singular: "скобка", plural: "скобки", accusative: "скобку"},
+        "*": {singular: "звездочка", plural: "звездочки", accusative: "звездочку"},
+        "+": {singular: "плюс", plural: "плюсы", accusative: "плюс"},
+        ",": {singular: "запятая", plural: "запятые", accusative: "запятую"},
+        "-": {singular: "тире", plural: "тире", accusative: "тире"},
+        ".": {singular: "точка", plural: "точки", accusative: "точку"},
+        "/": {singular: "палочка", plural: "палочки", accusative: "палочку"},
+        ":": {singular: "двоеточие", plural: "двоеточия", accusative: "двоеточие"},
+        ";": {singular: "точка с запятой", plural: "точки с запятыми", accusative: "точку с запятой"},
+        "<": {singular: "меньше", plural: "меньше", accusative: "меньше"},
+        ">": {singular: "больше", plural: "больше", accusative: "больше"},
+        "=": {singular: "равно", plural: "равно", accusative: "равно"},
+        "?": {singular: "вопрос", plural: "вопросы", accusative: "вопрос"},
+        "@": {singular: "собака", plural: "собаки", accusative: "собаку"},
+        "[": {singular: "скобка", plural: "скобки", accusative: "скобку"},
+        "]": {singular: "скобка", plural: "скобки", accusative: "скобку"},
+        "\\": {singular: "палочка", plural: "палочки", accusative: "палочку"},
+        "^": {singular: "крышечка", plural: "крышечки", accusative: "крышечку"},
+        "_": {singular: "тире", plural: "тире", accusative: "тире"},
+        "`": {singular: "кавычка", plural: "кавычки", accusative: "кавычку"},
+        "{": {singular: "скобка", plural: "скобки", accusative: "скобку"},
+        "|": {singular: "палочка", plural: "палочки", accusative: "палочку"},
+        "}": {singular: "скобка", plural: "скобки", accusative: "скобку"},
+        "~": {singular: "волна", plural: "волны", accusative: "волну"},
+    },
+
+    COMMON_WORDS: [
+        "и", "в", "не", "на", "я", "был", "была", "он", "с", "что", "а", "по", "это", "она", "этот", "к", "но", "они",
+        "мы", "как", "из", "у", "то", "за", "свой", "что", "весь", "год", "от", "так", "о", "для", "ты", "же", "все",
+        "тот", "мочь", "вы", "человек", "такой", "его", "только", "или", "еще", "бы", "себя", "один", "как", "уже",
+        "до", "время", "если", "сам", "когда", "вот", "наш", "мой", "при", "дело", "жизнь", "кто", "очень",
+        "два", "день", "ее", "рука", "даже", "во", "со", "раз", "где", "там", "под", "можно", "ну", "после", "их",
+        "без", "потом", "надо", "ли", "идти", "должен", "место", "ничто", "то", "сейчас",
+        "тут", "лицо", "друг", "нет", "теперь", "ни", "да", "меня", "мне", "мной", "нас", "ее", "её", "м", "иди"
+    ],
+
+    COMMON_LETTER_COMBINATIONS: [
+        "а ", "я ", "ой", "ска", "чка", "ай", "ть", "сто", "чик", "щик", "зна", "ста", "жи", "ный", "рый", "вый", "гов",
+        "дый", "нна", "енн", "ян", "бы", "что", "име", "ша", "шка", "нка", "ние", "ия", "ого", "ому", "ами", "ыми",
+        "ему", "ах", "ях", "вш", "ющ", "ущ", "ащ", "ящ", "ых", "ым", "при", "за", "из", "про", "пре", "анн", "ую",
+        "инт", "тел", "ов", "ера", "ко", "во", "аз", "ад", "ал", "чо", "ле", "ет", "ут", "ют", "ат", "еб", "аб", "еш",
+        "иц", "ец", "ца", "ци", "це", "оц", "цо", "ина", "шк", "тво", "сво", "мои", "мое", "теб", "тоб", "нам", "наш",
+        "ваш", "ней", "нее", "ним", "иш", "ищ", "чь", "ий", "эй", "чит", "очи"
+    ]
+    
+});
+
+AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP = new RegExp(`([^а-яё]|^)(${AggroBot.SpamDetector.COMMON_WORDS.join("|")})([^а-яё]|$)|(${AggroBot.SpamDetector.COMMON_LETTER_COMBINATIONS.join("|")})`, "i");
 
 VPP.Chat.prototype.aggrobot = (command, ...args) => {
 
