@@ -746,6 +746,10 @@ const AggroBot = class {
                     if (minutes < 45) return `${minutes <= 25 ? "почти" : ""} пол ${to12HourFormat(hours + 1)}`;
                     return "почти " + toFullHourFormat(hours + 1);
                 }
+                case "timehour": {
+                    const now = new Date();
+                    return (now.getHours() + (now.getMinutes() > 25)) % 24 || 12;
+                }
                 case "timeofday": {
                     const now = new Date();
                     const hours = now.getHours() + now.getMinutes() / 100;
@@ -2026,10 +2030,11 @@ AggroBot.SpamDetector = class {
                     /надоело|заебала?с|больше не буду/i.test(request.text)) return;
 
             // Если две последние фразы — не флуд, прекращаем игнорировать
+            const [last1, last2] = this._buffer.slice(-2);
             if (this.state === AggroBot.SpamDetector.State.IGNORING &&
-                this._buffer[this._buffer.length - 2].type === AggroBot.Request.Type.TEXT &&
-                this._buffer[this._buffer.length - 1].type === AggroBot.Request.Type.TEXT &&
-                this._buffer.slice(-2).every(request => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(request.text))) return;
+                last1.type === AggroBot.Request.Type.TEXT && last2.type === AggroBot.Request.Type.TEXT &&
+                last1.text != last2.text &&
+                [last1, last2].every(request => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(request.text))) return;
 
             let slice = this._buffer.slice(-AggroBot.SpamDetector.MESSAGES_TO_CHECK_SIMPLE);
             if (slice.every(request => request.type === AggroBot.Request.Type.TEXT)) {
@@ -2081,7 +2086,7 @@ AggroBot.SpamDetector = class {
                 // Проверяем на повторы
                 const clean = slice.map(AggroBot.SpamDetector.cleanString);
                 first = clean[0];
-                if (first && slice.every(str => str == first)) return result = "spam_repetition";
+                if (first && clean.every(str => str == first)) return result = "spam_repetition";
 
                 // Проверяем на копирование за ботом
                 if (clean.some(str => str.length > 6) && clean.every(str => this._outputBuffer.some(output =>
