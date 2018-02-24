@@ -2005,6 +2005,13 @@ AggroBot.SpamDetector = class {
          * @private
          */
         this._outputBuffer = [];
+
+        /**
+         * Сообщение, повторяющееся при соответствующей категории флуда
+         * @type {string}
+         * @private
+         */
+        this._repeatedText = null;
         
     }
 
@@ -2024,17 +2031,25 @@ AggroBot.SpamDetector = class {
 
         if (this._buffer.length >= AggroBot.SpamDetector.MESSAGES_TO_CHECK_SIMPLE) (() => {
 
-            // Проверяем на фразу о прекращении флуда
-            if (this.state === AggroBot.SpamDetector.State.IGNORING &&
-                    request.type === AggroBot.Request.Type.TEXT &&
-                    /надоело|заебала?с|больше не буду/i.test(request.text)) return;
+            if (this.state === AggroBot.SpamDetector.State.IGNORING) {
 
-            // Если две последние фразы — не флуд, прекращаем игнорировать
-            const [last1, last2] = this._buffer.slice(-2);
-            if (this.state === AggroBot.SpamDetector.State.IGNORING &&
-                last1.type === AggroBot.Request.Type.TEXT && last2.type === AggroBot.Request.Type.TEXT &&
-                last1.text != last2.text &&
-                [last1, last2].every(request => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(request.text))) return;
+                // Проверяем на фразу о прекращении флуда
+                if (request.type === AggroBot.Request.Type.TEXT && /надоело|заебала?с|больше не буду/i.test(request.text)) return;
+
+                // Если две последние фразы — не флуд, прекращаем игнорировать
+                const slice = this._buffer.slice(-2);
+                const [last1, last2] = slice;
+                if (last1.type === AggroBot.Request.Type.TEXT && last2.type === AggroBot.Request.Type.TEXT &&
+                    last1.text != last2.text &&
+                    (!this._repeatedText || !slice.map(request => AggroBot.SpamDetector.cleanString(request.text))
+                        .some(str => str == this._repeatedText)) &&
+                    !slice.some(request => this._outputBuffer.some(output => AggroBot.SpamDetector.stringsSimilar(request.text, output))) &&
+                    slice.every(request => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(request.text))) return;
+
+                result = "spam_ignoring";
+                return;
+
+            }
 
             let slice = this._buffer.slice(-AggroBot.SpamDetector.MESSAGES_TO_CHECK_SIMPLE);
             if (slice.every(request => request.type === AggroBot.Request.Type.TEXT)) {
@@ -2086,11 +2101,14 @@ AggroBot.SpamDetector = class {
                 // Проверяем на повторы
                 const clean = slice.map(AggroBot.SpamDetector.cleanString);
                 first = clean[0];
-                if (first && clean.every(str => str == first)) return result = "spam_repetition";
+                if (first && clean.every(str => str == first)) {
+                    this._repeatedText = first;
+                    return result = "spam_repetition";
+                }
 
                 // Проверяем на копирование за ботом
                 if (clean.some(str => str.length > 6) && clean.every(str => this._outputBuffer.some(output =>
-                        AggroBot.SpamDetector.levenshteinDistance(str, output) / Math.min(str.length, output.length) < 0.15))) {
+                        AggroBot.SpamDetector.stringsSimilar(str, output)))) {
                     return result = "spam_copying";
                 }
 
@@ -2135,7 +2153,10 @@ AggroBot.SpamDetector = class {
                     result = null;
                     break;
             }
-            else this.state = AggroBot.SpamDetector.State.ANALYZING;
+            else {
+                this._repeatedText = null;
+                this.state = AggroBot.SpamDetector.State.ANALYZING;
+            }
         }
 
         return {result, variables};
@@ -2193,6 +2214,10 @@ Object.assign(AggroBot.SpamDetector, {
 
         return matrix[str2.length][str1.length];
 
+    },
+
+    stringsSimilar(str1, str2) {
+        return AggroBot.SpamDetector.levenshteinDistance(str1, str2) / Math.min(str1.length, str2.length) < 0.15;
     },
 
     CHARACTER_NAMES: {
