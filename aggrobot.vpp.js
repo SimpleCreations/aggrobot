@@ -780,8 +780,9 @@ const AggroBot = class {
      */
     _getMessage(databaseKey) {
 
-        const message = this._processMessage(this._getRawMessage(databaseKey));
-        return message != null ? message : this._getMessage(databaseKey);
+        let message = null;
+        while (this._database.hasAvailable(databaseKey) && !message) message = this._processMessage(this._getRawMessage(databaseKey));
+        return message;
 
     }
 
@@ -1322,6 +1323,17 @@ AggroBot.Database = class {
     }
 
     /**
+     * Определяет, если ли в множестве ответов с данным ключом доступные ответы
+     * @param {string} key
+     * @returns {boolean}
+     */
+    hasAvailable(key) {
+
+        return !!this[key].totalAvailable;
+
+    }
+
+    /**
      * Возвращает случайный ответ по ключу
      * @param key
      * @returns {AggroBot.Response}
@@ -1444,7 +1456,7 @@ AggroBot.ResponseSet = class {
     constructor() {
 
         this._array = [];
-        this._totalAvailable = 0;
+        this.totalAvailable = 0;
 
     }
 
@@ -1455,7 +1467,7 @@ AggroBot.ResponseSet = class {
     add(response) {
 
         this._array.push(response);
-        this._totalAvailable++;
+        this.totalAvailable++;
 
     }
 
@@ -1474,8 +1486,8 @@ AggroBot.ResponseSet = class {
      */
     reset() {
 
-        this._totalAvailable = 0;
-        this.forEach(response => !response.unique && ++this._totalAvailable && (response.used = false));
+        this.totalAvailable = 0;
+        this.forEach(response => !response.unique && ++this.totalAvailable && (response.used = false));
 
     }
 
@@ -1484,7 +1496,7 @@ AggroBot.ResponseSet = class {
      */
     hardReset() {
 
-        this._totalAvailable = this._array.length;
+        this.totalAvailable = this._array.length;
         this.forEach(response => response.used = false);
 
     }
@@ -1495,17 +1507,14 @@ AggroBot.ResponseSet = class {
      */
     getRandom() {
 
-        if (!this._totalAvailable) {
-            this.reset();
-            if (!this._totalAvailable) return null;
-        }
+        if (!this.totalAvailable) return null;
 
-        const index = Math.floor(Math.random() * this._totalAvailable);
+        const index = Math.floor(Math.random() * this.totalAvailable);
         let counter = 0;
         for (let response of this._array) if (!response.used) {
             if (index == counter) {
                 response.used = true;
-                this._totalAvailable--;
+                if (!--this.totalAvailable) this.reset();
                 return response;
             }
             counter++;
