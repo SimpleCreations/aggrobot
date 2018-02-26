@@ -384,7 +384,7 @@ const AggroBot = class {
         if (request != null) switch (request.type) {
             case AggroBot.Request.Type.TEXT:
                 if (!this._photoSent &&
-                        /(фот|селфи)[а-яё]* (себя |сво[еёию] )?(с?кин(ь|еш)|кида(й|еш)|го(?![а-я])|сдела(й|еш)|(при|вы|ото)шл(и|еш)|отправ(ь|иш))|(кин|кида|([^а-яё]|^)го|сдела|(при|вы|ото)шл|отправ)(и|й|еш|иш)?ь? (себя |сво[еёию] )?(фот|селфи)|сфот(к?а|огр[ао]фиру)й(ся| себя)/i.test(request.text) &&
+                        /(фот|селфи)[а-яё]* (себя |сво[еёию] )?(с?кин(ь|еш)|кида(й|еш)|го(?![а-я])|давай|сдела(й|еш)|(при|вы|ото)шл(и|еш)|отправ(ь|иш))|(кин|кида|([^а-яё]|^)го|дава|сдела|(при|вы|ото)шл|отправ)(и|й|еш|иш)?ь? (себя |сво[еёию] )?(фот|селфи)|сфот(к?а|огр[ао]фиру)й(ся| себя)/i.test(request.text) &&
                         !this._responseQueue.some(queued => queued.pattern == "photo_sending")) {
                     this._processAndAddToQueue(this._getMessage("photo_sending"), Object.assign({
                         pattern: "photo_sending"
