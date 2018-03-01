@@ -1034,7 +1034,7 @@ Object.assign(AggroBot, {
      * @returns {number}
      */
     getSplitProbabilityByCurrentPart(message) {
-        return 2 / (1 + Math.exp(-0.044 * message.length)) + 1;
+        return 2 / (1 + Math.exp(-0.09 * message.length)) - 1;
     },
 
     /**
