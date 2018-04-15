@@ -1,8 +1,4 @@
 {
   "script_version": "1.0.1",
-<<<<<<< HEAD
-  "database_version": "1.17"
-=======
-  "database_version": "1.18"
->>>>>>> 5582901c1e4524082d629f309f28685d57793335
+  "database_version": "1.19"
 }
