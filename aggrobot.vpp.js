@@ -24,49 +24,44 @@ $.ajax({
     url: VPPScript.meta["update-url"],
     dataType: "json",
     cache: false
-})
-    .pipe(response => response["script_version"] ? response : $.Deferred().reject())
-    .done(response => {
+}).pipe(response => response["script_version"] ? response : $.Deferred().reject()).done(response => {
 
-        if (compareVersions(response["script_version"], VPPScript.meta["version"]) < 0) {
-            return log(`Вы используете устаревший скрипт.<br>
+    if (compareVersions(response["script_version"], VPPScript.meta["version"]) < 0) {
+        return log(`Вы используете устаревший скрипт.<br>
 Текущая версия: ${VPPScript.meta["version"]}<br>
 Последняя версия: ${response["script_version"]}<br>
 Введите "/aggrobot download", чтобы скачать последнюю версию.`);
-        }
-        log("Вы используете последнюю версию скрипта.");
+    }
+    log("Вы используете последнюю версию скрипта.");
 
-        if (!response["database_version"]) return log("Не удалось получить последнюю версию базы сообщений.");
-        const currentDatabaseVersion = VPPScript.storage.databaseVersion;
-        if (!currentDatabaseVersion || compareVersions(response["database_version"], currentDatabaseVersion) < 0) {
+    if (!response["database_version"]) return log("Не удалось получить последнюю версию базы сообщений.");
+    const currentDatabaseVersion = VPPScript.storage.databaseVersion;
+    if (!currentDatabaseVersion || compareVersions(response["database_version"], currentDatabaseVersion) < 0) {
 
-            log(!currentDatabaseVersion ? "Идёт скачивание базы сообщений..." : "Идёт обновление базы сообщений...");
-            $.ajax({
-                url: VPPScript.meta["database-url"],
-                dataType: "json",
-                cache: false
-            })
-                .done(database => {
-                    VPPScript.storage.database = database;
-                    VPPScript.storage.databaseVersion = response["database_version"];
-                    VPPScript.storage.save();
-                    log("База сообщений успешно " + (!currentDatabaseVersion ? "загружена." : "обновлена."));
-                    enableScript();
-                })
-                .fail(() => {
-                    log("Не удалось скачать базу сообщений.");
-                    if (currentDatabaseVersion) enableScript();
-                });
+        log(!currentDatabaseVersion ? "Идёт скачивание базы сообщений..." : "Идёт обновление базы сообщений...");
+        $.ajax({
+            url: VPPScript.meta["database-url"],
+            dataType: "json",
+            cache: false
+        }).done(database => {
+            VPPScript.storage.database = database;
+            VPPScript.storage.databaseVersion = response["database_version"];
+            VPPScript.storage.save();
+            log("База сообщений успешно " + (!currentDatabaseVersion ? "загружена." : "обновлена."));
+            enableScript();
+        }).fail(() => {
+            log("Не удалось скачать базу сообщений.");
+            if (currentDatabaseVersion) enableScript();
+        });
 
-            VPP.chats.forEach(chat =>
-                chat.addEventListener(VPP.Chat.Event.CONNECTED, "aggrobot", () =>
-                    chat.log("[AggroBot] Скрипт начнёт работу только по завершении загрузки базы сообщений.")));
+        VPP.chats.forEach(chat =>
+            chat.addEventListener(VPP.Chat.Event.CONNECTED, "aggrobot", () =>
+                chat.log("[AggroBot] Скрипт начнёт работу только по завершении загрузки базы сообщений.")));
 
-        }
-        else enableScript();
+    }
+    else enableScript();
 
-    })
-    .fail(() => log("Не удалось получить данные об обновлении."));
+}).fail(() => log("Не удалось получить данные об обновлении."));
 
 const enableScript = () => {
 
@@ -102,7 +97,47 @@ const enableScript = () => {
 
             // Генерируем новое состояние бота и готовим приветственное сообщение
             aggroBot.reset();
-            aggroBot.prepareResponse();
+
+            // Обращаемся к деанонимайзеру
+            if (AggroBot.deanonEnabled && AggroBot.deanonURL) {
+
+                // Если включён деанонимайзер, то ожидаем ответа от него в течение некоторого времени перед тем, как запрашивать приветствие
+                const chatId = chat.chatId;
+                let responseRequested = false;
+                setTimeout(() =>
+                    !responseRequested && (responseRequested = true) && chat.chatId == chatId && aggroBot.prepareResponse(), 1750);
+
+                VPP.ajax({
+                    url: AggroBot.deanonURL,
+                    data: {
+                        guid: chat.guidOpp
+                    },
+                    cache: false,
+                    success: function(response) {
+
+                        if (chat.chatId != chatId) return;
+
+                        response = JSON.parse(response);
+                        if (Array.isArray(response["log"])) response["log"].forEach(row => console.log(row));
+
+                        if (!response["gender"] && !response["name"] && !response["vk"]) chat.log("Деанонимайзер не нашёл данных об этом пользователе");
+                        else aggroBot.processDeanonResult((gender => {
+                            return gender == "male" ? AggroBot.UserProfile.Gender.MALE :
+                                gender == "female" ? AggroBot.UserProfile.Gender.FEMALE : undefined;
+                        })(response["gender"]), response["name"], response["vk"]);
+
+                        if (!responseRequested) {
+                            responseRequested = true;
+                            aggroBot.prepareResponse();
+                        }
+
+                    }
+                });
+
+            }
+
+            // Иначе просто готовим приветствие
+            else aggroBot.prepareResponse();
 
         });
 
@@ -217,6 +252,14 @@ const AggroBot = class {
         this._intendsToLeave = false;
 
         /**
+         * Количество сообщений, отправленных ботом.
+         * Используется для оценки актуальности тех или иных сообщений от собеседника.
+         * @type {number}
+         * @private
+         */
+        this._messagesReceived = 0;
+
+        /**
          * Информация о пользователе
          * @type {AggroBot.UserProfile}
          * @private
@@ -313,6 +356,7 @@ const AggroBot = class {
         this._inactivityCounter = 0;
         this._intendsToLeave = false;
 
+        this._messagesReceived++;
         this._directResponse = true;
 
         // Смотрим, есть ли в очереди ответы, которые должны быть удалены из очереди во время получения сообщения
@@ -419,6 +463,39 @@ const AggroBot = class {
                     }, defaultOptions)) && (added = true);
                 }
                 break;
+        }
+        
+        // Добавляем в очередь уточнение имени собеседника, а также ответ об источнике информации и рифму к имени
+        if (!added && ready && this._userProfile.name && typeof this._userProfile.nameConfirmationRequestedAt === "undefined" &&
+                Math.random() < AggroBot.PROBABILITY_NAME_CONFIRMATION) {
+            console.log("Reporting name...");
+            this._processAndAddToQueue(this._getMessage("deanon_name_confirmation"), defaultOptions);
+            this._userProfile.nameConfirmationRequestedAt = this._messagesReceived;
+            added = true;
+        }
+        if (typeof this._userProfile.nameConfirmationRequestedAt !== "undefined" && request && request.type === AggroBot.Request.Type.TEXT &&
+                this._messagesReceived - this._userProfile.nameConfirmationRequestedAt <= 5) {
+            if (/(как|откуда)( ты)?( меня)? (узнал|знаешь|угадал)/.test(request.text)) {
+                this._processAndAddToQueue(this._getMessage("deanon_name_source"), defaultOptions);
+                this._userProfile.nameConfirmed = true;
+                console.log("Name confirmed");
+                added = true;
+            }
+            else if (/^да+([^а-яё]|$)|^(угадал|почти|ага)|(^конечно|почти|допустим|прикинь)[^а-я]*$/i.test(request.text)) {
+                this._userProfile.nameConfirmed = true;
+                console.log("Name confirmed");
+            }
+        }
+        if (!added && ready && this._userProfile.nameConfirmed && !this._userProfile.nameRhymed &&
+                Math.random() < AggroBot.PROBABILITY_NAME_RHYME) {
+            const rhyme = this._getNameRhyme();
+            if (rhyme) {
+                console.log("Got a rhyme to the name...");
+                this._processAndAddToQueue(rhyme, defaultOptions);
+                this._userProfile.nameRhymed = added = true;
+                allowSecondary = false;
+            }
+            else console.log("No rhymes to this name");
         }
 
         // Добавялем в очередь условный ответ
@@ -708,6 +785,8 @@ const AggroBot = class {
                         return genderName[Math.floor(Math.random() * genderName.length)];
                     }
                     return (this._userProfile.gender === AggroBot.UserProfile.Gender.MALE ? args[0] : args[1]) || "";
+                case "userprofilename":
+                    return this._userProfile.name || "";
                 case "d":
                 case "direct":
                     if (!this._directResponse) invalid = true;
@@ -964,6 +1043,41 @@ const AggroBot = class {
 
     }
 
+    /**
+     *
+     * @param {number} [gender] Пол
+     * @param {string} [name] Имя
+     * @param {string} [vk] Ссылка на профиль ВКонтакте
+     */
+    processDeanonResult(gender, name, vk) {
+
+        if (typeof gender !== "undefined") {
+            this.onReport(`Деанонимайзер: пол: ${gender === AggroBot.UserProfile.Gender.MALE ? "мужской" : "женский"}`);
+            this._userProfile.gender = gender;
+        }
+
+        if (typeof name !== "undefined") {
+            name = name.substr(0, 1).toUpperCase() + name.substr(1);
+            this.onReport(`Деанонимайзер: имя: ${name}`);
+            this._userProfile.name = name;
+        }
+
+    }
+
+    /**
+     * Подбирает рифму к имени из профиля собеседника
+     * @returns {string}
+     * @private
+     */
+    _getNameRhyme() {
+
+        for (let matcher of this._database.nameRhymes) {
+            const {response} = matcher.match(this._userProfile.name);
+            if (response) return response.string;
+        }
+
+    }
+
 };
 
 Object.assign(AggroBot, {
@@ -1106,7 +1220,48 @@ Object.assign(AggroBot, {
     /**
      * Ссылка на фото, которое бот будет отправлять в чат
      */
-    selfieURL: "https://s17.postimg.org/wv15aam4f/image.jpg"
+    selfieURL: "https://s17.postimg.org/wv15aam4f/image.jpg",
+
+    /**
+     * Включена ли возможность приёма, отправки и обработки профилей ВКонтакте
+     */
+    vkEnabled: VPPScript.storage.get("vkEnabled") || true,
+
+    /**
+     * Короткая ссылка на профиль ВКонтакте бота
+     */
+    vkCustomURL: "4etkiy_poz",
+
+    /**
+     * Ссылка на профиль ВКонтакте бота с ID
+     */
+    vkIdURL: "id471643183",
+
+    /**
+     * Будет ли бот присылать собеседникам ссылку с ID вместо короткой
+     */
+    vkUseIdURL: true,
+
+    /**
+     * Будет ли использоваться деанонимайзер для определения пола, имени и профиля ВКонтакте собеседника
+     * по его идентификатору ЧатВдвоем
+     */
+    deanonEnabled: VPPScript.storage.get("deanonEnabled") || false,
+
+    /**
+     * Ссылка на деанонимайзер
+     */
+    deanonURL: VPPScript.storage.get("deanonURL") || undefined,
+
+    /**
+     * Вероятность того, что бот уточнит у собеседника его имя
+     */
+    PROBABILITY_NAME_CONFIRMATION: 0.1,
+
+    /**
+     * Вероятность того, что бот придумает рифму к имени собеседника
+     */
+    PROBABILITY_NAME_RHYME: 0.25
 
 });
 
@@ -1296,6 +1451,11 @@ AggroBot.Database = class {
          */
         this.conditional = new Map();
 
+        /**
+         * @type {Array<AggroBot.Matcher>}
+         */
+        this.nameRhymes = [];
+
     }
 
     /**
@@ -1415,6 +1575,12 @@ Object.assign(AggroBot.Database, {
             database.conditional.set(key, set);
         });
 
+        if (typeof raw.name_rhymes === "object") Object.keys(raw.name_rhymes).forEach(names => {
+            const set = new AggroBot.ResponseSet();
+            raw.name_rhymes[names].forEach(string => set.add(new AggroBot.Response(new String(string))));
+            database.nameRhymes.push(new AggroBot.Matcher(new RegExp("^(?:" + names.replace(/,/g, "|") + ")$"), set));
+        });
+
         return database;
 
     },
@@ -1437,6 +1603,9 @@ Object.assign(AggroBot.Database, {
 
         anotherDatabase.conditional.forEach((set, key) =>
             database.conditional.set(key, set.clone()));
+
+        anotherDatabase.nameRhymes.forEach(matcher =>
+            database.nameRhymes.push(new AggroBot.Matcher(matcher.regExp, matcher.responses.clone())));
 
         return database;
 
@@ -1615,9 +1784,33 @@ AggroBot.UserProfile = class {
 
         /**
          * Гендер
-         * @type {AggroBot.UserProfile.Gender}
+         * @type {number}
          */
         this.gender = AggroBot.UserProfile.Gender.MALE;
+
+        /**
+         * Имя
+         * @type {string}
+         */
+        this.name = undefined;
+
+        /**
+         * Каким по порядку сообщением бот уточнил имя у собеседника
+         * @type {number}
+         */
+        this.nameConfirmationRequestedAt = undefined;
+
+        /**
+         * Подтвердил ли собеседник имя
+         * @type {boolean}
+         */
+        this.nameConfirmed = false;
+
+        /**
+         * Отвечал ли бот рифмой к имени
+         * @type {boolean}
+         */
+        this.nameRhymed = false;
 
     }
 
@@ -1785,7 +1978,7 @@ AggroBot.Style = class {
             let typos = 0;
             for (let i = 0; i < part.length; i++) {
                 if (Math.random() < this.typoProbability) {
-                    console.log(`making a typo in "${part}" @ ${i}`);
+                    // console.log(`making a typo in "${part}" @ ${i}`);
                     typos++;
                     let random = Math.random();
                     if (random < this.swapTypoProbability && i != part.length - 1) newPart += part[i + 1] + part[i++];
@@ -1810,8 +2003,8 @@ AggroBot.Style = class {
                 if (lastCorrected) corrections[corrections.length - 1] += " " + matches[1];
                 else if (Math.random() < AggroBot.Style._getTypeCorrectionProbability(typos) *
                     Math.pow(this.typoCorrectionProbabilityMultiplier, corrections.length + 1)) {
-                    console.log("Adding correction, prob: " + AggroBot.Style._getTypeCorrectionProbability(typos) *
-                        Math.pow(this.typoCorrectionProbabilityMultiplier, corrections.length + 1));
+                    // console.log("Adding correction, prob: " + AggroBot.Style._getTypeCorrectionProbability(typos) *
+                    //     Math.pow(this.typoCorrectionProbabilityMultiplier, corrections.length + 1));
                     corrections.push(matches[1]);
                     lastCorrected = true;
                 }
@@ -1848,7 +2041,7 @@ AggroBot.Style = class {
                 }
                 result += part.replace(letterRegExp, (letter, offset) => {
                     if ("аоеи".indexOf(letter) == -1 || Math.random() > this.misspellProbability[0]) return letter;
-                    console.log(`misspelling "${part}" with type 0 @ ${offset}`);
+                    // console.log(`misspelling "${part}" with type 0 @ ${offset}`);
                     switch (letter) {
                         case "а": return "о";
                         case "о": return "а";
@@ -1879,7 +2072,7 @@ AggroBot.Style = class {
             const type = index + 1;
             string = string.replace(regExp, (...matches) => {
                 if (Math.random() > this.misspellProbability[type]) return matches[0];
-                console.log(`misspelling "${string}" with type ${type} @ ${matches[matches.length - 2]}`);
+                // console.log(`misspelling "${string}" with type ${type} @ ${matches[matches.length - 2]}`);
                 switch (type) {
                     case 1:
                         return "т" + (matches[1] ? "" : "ь") + "ся";
@@ -2330,6 +2523,7 @@ AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP = new RegExp(`([^а-яё]|^)(${Aggr
 
 VPP.Chat.prototype.aggrobot = (command, ...args) => {
 
+    command = command.split(" ")[0];
     switch (command) {
 
         case "download":
@@ -2342,6 +2536,21 @@ VPP.Chat.prototype.aggrobot = (command, ...args) => {
             $a.remove();
 
             break;
+
+        default:
+
+            if (!args.length) return;
+            const keys = [command].concat(args.filter((_, index) => index & 1));
+            const values = args.filter((_, index) => !(index & 1));
+            if (keys.length > values.length) keys.pop();
+            if (values.length > keys.length) values.pop();
+
+            keys.forEach((key, index) => {
+                if (!AggroBot.hasOwnProperty(key)) return;
+                AggroBot[key] = (value => value == "true" ? true : value == "false" ? false : value)(values[index]);
+                VPPScript.storage.set(key, AggroBot[key]);
+            });
+            VPPScript.storage.save();
 
     }
 
