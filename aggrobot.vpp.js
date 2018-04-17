@@ -350,7 +350,7 @@ const AggroBot = class {
     receiveMessage(request) {
 
         // Пытаемся определить пол
-        if (request.type === AggroBot.Request.Type.TEXT) this._determineGender(request.text);
+        if (request.type === AggroBot.Request.Type.TEXT) this._determineGenderAndName(request.text);
 
         // Полученное сообщение считается активностью, поэтому сбрасываем счётчик
         this._inactivityCounter = 0;
@@ -466,29 +466,35 @@ const AggroBot = class {
         }
         
         // Добавляем в очередь уточнение имени собеседника, а также ответ об источнике информации и рифму к имени
-        if (!added && ready && this._userProfile.name && typeof this._userProfile.nameConfirmationRequestedAt === "undefined" &&
-                Math.random() < AggroBot.PROBABILITY_NAME_CONFIRMATION) {
+        if (!added && ready && this._userProfile.name && !this._userProfile.nameConfirmed &&
+                Math.random() < AggroBot.getNameConfirmationProbability(this._userProfile.nameConfirmationRequests)) {
             console.log("Reporting name...");
-            this._processAndAddToQueue(this._getMessage("deanon_name_confirmation"), defaultOptions);
-            this._userProfile.nameConfirmationRequestedAt = this._messagesReceived;
+            this._processAndAddToQueue(this._getMessage("name_confirmation"), defaultOptions);
+            this._userProfile.nameConfirmationRequestedAt = this._userProfile.nameAskedAt = this._messagesReceived;
             added = true;
         }
         if (typeof this._userProfile.nameConfirmationRequestedAt !== "undefined" && request && request.type === AggroBot.Request.Type.TEXT &&
                 this._messagesReceived - this._userProfile.nameConfirmationRequestedAt <= 5) {
             if (/(как|откуда)( ты)?( меня)? (узнал|знаешь|угадал)/.test(request.text)) {
-                this._processAndAddToQueue(this._getMessage("deanon_name_source"), defaultOptions);
+                this._processAndAddToQueue(this._getMessage("name_source"), defaultOptions);
                 this._userProfile.nameConfirmed = true;
-                console.log("Name confirmed");
                 added = true;
-            }
-            else if (/^да+([^а-яё]|$)|^(угадал|почти|ага)|(^конечно|почти|допустим|прикинь)[^а-я]*$/i.test(request.text)) {
+                console.log("Name confirmed");
+            } else if (/^да+([^а-яё]|$)|^(угадал|почти|ага)|(^конечно|почти|допустим|прикинь|а что)[^а-я]*$/i.test(request.text)) {
                 this._userProfile.nameConfirmed = true;
                 console.log("Name confirmed");
+            } else if (/^не([та\-]| верно| угадал)|^(мен)?я не /.test(request.text)) {
+                this._processAndAddToQueue(this._getMessage("name_incorrect"), defaultOptions);
+                this._userProfile.name = undefined;
+                this._userProfile.nameAskedAt = this._messagesReceived;
+                added = true;
+                console.log("Name rejected");
             }
         }
         if (!added && ready && this._userProfile.nameConfirmed && !this._userProfile.nameRhymed &&
                 Math.random() < AggroBot.PROBABILITY_NAME_RHYME) {
-            const rhyme = this._getNameRhyme();
+            const rhyme = AggroBot.nameVariations.split(",").indexOf(this._userProfile.name) == -1 ?
+                this._getNameRhyme() : this._getMessage("name_same");
             if (rhyme) {
                 console.log("Got a rhyme to the name...");
                 this._processAndAddToQueue(rhyme, defaultOptions);
@@ -839,6 +845,9 @@ const AggroBot = class {
                 }
                 case "timedayofweek":
                     return ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"][new Date().getDay()];
+                case "asksname":
+                    this._userProfile.nameAskedAt = this._messagesReceived;
+                    break;
                 default:
                     if (typeof this._variables[name] === "string") return this._variables[name];
                     else if (typeof this._variables[name] === "function") return this._variables[name].apply(this, args);
@@ -1019,17 +1028,32 @@ const AggroBot = class {
     }
 
     /**
-     * Пытается определить пол по сообщению и записать в профиль
+     * Пытается определить имя и пол по сообщению и записать в профиль
      * @param message
      * @private
      */
-    _determineGender(message) {
+    _determineGenderAndName(message) {
 
-        let gender;
-        if (/((^[^а-яё]*я? ?|([^а-я]|^)я (([а-мо-яё]|н(?!е))+[ \-])*)([жд](?=$| ?[.,])|дев(оч|ч[ео]н|уш)ка|женщина|женского|баба|телка|тянк?а?)|(^|[^а-яё])я (бы )?[а-яё]{3,}(ая|[кл]а))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я (ведь )?не (м|парень?|пацан|мальчик|муж(ик|чина)?|чувак)($|[^а-яё])|((я|меня( зовут)?) |^)(А[лр]и[нс]а|Агата|Аделина|Адель|Аида|Ал[её]на|Алевтина|Александра|Алла|Альбина|Аля|Анастасия|Анжел+а|Анжели[кн]а|Анна|Анфиса|Аня|Ася|Белла|Валентина|Валерия|Валя|Варвара|Варя|Вика|Виктория|Вилена|Виолет+а|Виталина|Галина|Галя|Дарина|Дарья|Даша|Диа?на|Ева|Евгения|Евдокия|Екатерина|Елена|Елизавета|Жанна|Злата|Зоя|Зина|Зинаида|Инга|Инесса|Инна|Ира|Ирина|Ирочка|Карина|Каролина|Катюша|Катя|Кира|Кристина|Ксения|Ксюша|Лара|Лариса|Ленк?а|Лера|Лида|Лидия|Лиза|Лилия|Лиля|Лина|Лия|Люба|Люда|Людмила|Людочка|Маргарита|Марго|Марина|Мария?|Марьяна|Маша|Мил[еа]на|Мила|Надежда|Надя|Наст[её]на|Настю[хш]а|Настя|Ната|Наталья|Наташа|Ника|Николь|Нина|Оксана|Олеся|Ольга|Оля|Полина|Поля|Раиса|Регина|Рената|Рита|Роза|Розалия|Руфина|Саша [дж]|Светк?а|Светлана|Снежана|Соня|Софа|Софья|Т[ао]мара|Таисия|Танюша|Таня|Татьяна|Тая|Тома|Ульяна|Уля|Фаина|Фатима|Эвелина|Эл+ина|Элеонора|Эл[иь]за|Эль[вм]ира|Эля|Эмилия|Эмма|Эрика|Юли?я|Юлька|Яна|Ярослава)([^а-яё?]|$)|у меня нет (хуя|члена|яиц)/i.test(message)) {
+        // Когда нашли имя:
+        // Если было написано "меня зовут", то сохраняем его без дополнительных проверок.
+        // Если просто написано имя, то смотрим, спрашивал ли его бот недавно.
+        const onNameMatched = matches => {
+            if (!matches[1] || this._userProfile.nameAskedAt && this._messagesReceived - this._userProfile.nameAskedAt <= 6) {
+                this._userProfile.name = matches[2];
+                this._userProfile.nameConfirmed = true;
+            }
+        };
+
+        let gender, matches;
+        if (matches = message.match(/((?:я|меня(?: зовут)?) |^)(А[лр]и[нс]а|Агата|Аделина|Адель|Аида|Ал[её]на|Алевтина|Александра|Алла|Альбина|Аля|Анастасия|Анжел+а|Анжели[кн]а|Анна|Анфиса|Аня|Ася|Белла|Валентина|Валерия|Валя|Варвара|Варя|Вика|Виктория|Вилена|Виолет+а|Виталина|Галина|Галя|Дарина|Дарья|Даша|Диа?на|Ева|Евгения|Евдокия|Екатерина|Елена|Елизавета|Жанна|Злата|Зоя|Зина|Зинаида|Инга|Инесса|Инна|Ира|Ирина|Ирочка|Карина|Каролина|Катюша|Катя|Кира|Кристина|Ксения|Ксюша|Лара|Лариса|Ленк?а|Лера|Лида|Лидия|Лиза|Лилия|Лиля|Лина|Лия|Люба|Люда|Людмила|Людочка|Маргарита|Марго|Марина|Мария?|Марьяна|Маша|Мил[еа]на|Мила|Надежда|Надя|Наст[её]на|Настю[хш]а|Настя|Ната|Наталья|Наташа|Ника|Николь|Нина|Оксана|Олеся|Ольга|Оля|Полина|Поля|Раиса|Регина|Рената|Рита|Роза|Розалия|Руфина|Саша [дж]|Светк?а|Светлана|Снежана|Соня|Софа|Софья|Т[ао]мара|Таисия|Танюша|Таня|Татьяна|Тая|Тома|Ульяна|Уля|Фаина|Фатима|Эвелина|Эл+ина|Элеонора|Эл[иь]за|Эль[вм]ира|Эля|Эмилия|Эмма|Эрика|Юли?я|Юлька|Яна|Ярослава)(?:[^а-яё?]|$)/i)) {
             gender = AggroBot.UserProfile.Gender.FEMALE;
-        }
-        else if (/((^[^а-яё]*я? ?|([^а-я]|^)я (([а-мо-яё]|н(?!е))+[ \-])*)(м|парень?|пацан|мальчик|муж(ик|чина|ского)?)|(^|[^а-яё])я (бы )?[а-яё]{2,}(ый|л))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я (ведь )?не ([жд]|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)($|[^а-яё])|((я|меня( зовут)?) |^)(Адам|Аким|Александр|Алексей|Анатолий|Андрей|Андрю[хш]а|Антон|Аркадий|Аркаша|Арсен|Арсений|Арт[её]м|Арт[её]мий|Артур|Афанасий|Богдан|Борис|Боря|Вади[мк]|Валентин|Валерий|Ваня|Василий|Вася|Вениамин|Веня|Виктор|Витали[йк]|Витя|Влад|Владимир|Владислав|Владлен|Вовк?а|Всеволод|Всеслав|Вячеслав|Ген+адий|Гена|Георгий|Герман|Глеб|Григорий|Гриша|Давид|Даниил|Данила?|Даня|Демьян|Денис|Дима|Дмитрий|Евгений|Егор|Женя|Жора|Жорик|Захар|Иван|Игнат|Игнатий|Игорь|Ил+арион|Илья|Илю[хш]а|Инн+окентий|Иосиф|Кеша|Кирилл|Колян?|Константин|Костик|Костя|Л[её]ня|Л[её]ха|Л[её]ша|Лев|Леонид|Макар|Макс|Максим|Марат|Марк|Матвей|Мирослав|Миха|Михаил|Миша|Никита|Николай|Олег|П[её]тр|Павел|Паша|Петя|Платон|Р[еи]нат|Радислав|Роберт|Родион|Рома|Роман|Ростислав|Руслан|С[её]ма|Сав+а|Савелий|Саша м|Святослав|Сем[её]н|Сеня|Сер[её][гж]а|Серафим|Сергей|Слава|Ст[её]па|Станислав|Стас|Степан|Тима|Тимофей|Тимур|Толик|Толя|Тоха|Ф[её]дор|Федя|Феликс|Филипп|Филя|Эдик|Эдуард|Эмиль|Эрик|Эрнест|Юлий|Юра|Юрий|Яков|Ян|Ярослав)([^а-яё?]|$)/i.test(message)) {
+            onNameMatched(matches);
+        } else if (matches = message.match(/((?:я|меня(?: зовут)?) |^)(Адам|Аким|Александр|Алексей|Анатолий|Андрей|Андрю[хш]а|Антон|Аркадий|Аркаша|Арсен|Арсений|Арт[её]м|Арт[её]мий|Артур|Афанасий|Богдан|Борис|Боря|Вади[мк]|Валентин|Валерий|Ваня|Василий|Вася|Вениамин|Веня|Виктор|Витали[йк]|Витя|Влад|Владимир|Владислав|Владлен|Вовк?а|Всеволод|Всеслав|Вячеслав|Ген+адий|Гена|Георгий|Герман|Глеб|Григорий|Гриша|Давид|Даниил|Данила?|Даня|Демьян|Денис|Дима|Дмитрий|Евгений|Егор|Женя|Жора|Жорик|Захар|Иван|Игнат|Игнатий|Игорь|Ил+арион|Илья|Илю[хш]а|Инн+окентий|Иосиф|Кеша|Кирилл|Колян?|Константин|Костик|Костя|Л[её]ня|Л[её]ха|Л[её]ша|Лев|Леонид|Макар|Макс|Максим|Марат|Марк|Матвей|Мирослав|Миха|Михаил|Миша|Никита|Николай|Олег|П[её]тр|Павел|Паша|Петя|Платон|Р[еи]нат|Радислав|Роберт|Родион|Рома|Роман|Ростислав|Руслан|С[её]ма|Сав+а|Савелий|Саша м|Святослав|Сем[её]н|Сеня|Сер[её][гж]а|Серафим|Сергей|Слава|Ст[её]па|Станислав|Стас|Степан|Тима|Тимофей|Тимур|Толик|Толя|Тоха|Ф[её]дор|Федя|Феликс|Филипп|Филя|Эдик|Эдуард|Эмиль|Эрик|Эрнест|Юлий|Юра|Юрий|Яков|Ян|Ярослав)(?:[^а-яё?]|$)/i)) {
+            gender = AggroBot.UserProfile.Gender.MALE;
+            onNameMatched(matches);
+        } else if (/((^[^а-яё]*я? ?|([^а-я]|^)я (([а-мо-яё]|н(?!е))+[ \-])*)([жд](?=$| ?[.,])|дев(оч|ч[ео]н|уш)ка|женщина|женского|баба|телка|тянк?а?)|(^|[^а-яё])я (бы )?[а-яё]{3,}(ая|[кл]а))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я (ведь )?не (м|парень?|пацан|мальчик|муж(ик|чина)?|чувак)($|[^а-яё])|у меня нет (хуя|члена|яиц)/i.test(message)) {
+            gender = AggroBot.UserProfile.Gender.FEMALE;
+        } else if (/((^[^а-яё]*я? ?|([^а-я]|^)я (([а-мо-яё]|н(?!е))+[ \-])*)(м|парень?|пацан|мальчик|муж(ик|чина|ского)?)|(^|[^а-яё])я (бы )?[а-яё]{2,}(ый|л))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я (ведь )?не ([жд]|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)($|[^а-яё])/i.test(message)) {
             gender = AggroBot.UserProfile.Gender.MALE;
         }
 
@@ -1218,6 +1242,11 @@ Object.assign(AggroBot, {
     shortName: "Тоха",
 
     /**
+     * Все варианты имени бота
+     */
+    nameVariations: "Антон,Антоша,Антошка,Антоха,Тоха",
+
+    /**
      * Ссылка на фото, которое бот будет отправлять в чат
      */
     selfieURL: "https://s17.postimg.org/wv15aam4f/image.jpg",
@@ -1254,14 +1283,17 @@ Object.assign(AggroBot, {
     deanonURL: VPPScript.storage.get("deanonURL") || undefined,
 
     /**
-     * Вероятность того, что бот уточнит у собеседника его имя
+     * Получает вероятность того, что бот уточнит у собеседника его имя
+     * @param {number} amountOfRequests Количество запросов
      */
-    PROBABILITY_NAME_CONFIRMATION: 0.1,
+    getNameConfirmationProbability(amountOfRequests) {
+        return 1 / (9 * (amountOfRequests + 1));
+    },
 
     /**
      * Вероятность того, что бот придумает рифму к имени собеседника
      */
-    PROBABILITY_NAME_RHYME: 0.25
+    PROBABILITY_NAME_RHYME: 1
 
 });
 
@@ -1801,6 +1833,12 @@ AggroBot.UserProfile = class {
         this.nameConfirmationRequestedAt = undefined;
 
         /**
+         * Количество уточнений имени у собеседника
+         * @type {number}
+         */
+        this.nameConfirmationRequests = 0;
+
+        /**
          * Подтвердил ли собеседник имя
          * @type {boolean}
          */
@@ -1811,6 +1849,12 @@ AggroBot.UserProfile = class {
          * @type {boolean}
          */
         this.nameRhymed = false;
+
+        /**
+         * Каким по порядку сообщением бот спросил имя у собеседника
+         * @type {number}
+         */
+        this.nameAskedAt = undefined;
 
     }
 
