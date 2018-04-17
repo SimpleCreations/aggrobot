@@ -105,7 +105,8 @@ const enableScript = () => {
                 const chatId = chat.chatId;
                 let responseRequested = false;
                 setTimeout(() =>
-                    !responseRequested && (responseRequested = true) && chat.chatId == chatId && aggroBot.prepareResponse(), 1750);
+                    !responseRequested && (responseRequested = true) &&
+                    chat.chatId == chatId && !aggroBot.messagesReceived && aggroBot.prepareResponse(), 1750);
 
                 VPP.ajax({
                     url: AggroBot.deanonURL,
@@ -128,7 +129,7 @@ const enableScript = () => {
 
                         if (!responseRequested) {
                             responseRequested = true;
-                            aggroBot.prepareResponse();
+                            if (!aggroBot.messagesReceived) aggroBot.prepareResponse();
                         }
 
                     }
@@ -255,9 +256,8 @@ const AggroBot = class {
          * Количество сообщений, отправленных ботом.
          * Используется для оценки актуальности тех или иных сообщений от собеседника.
          * @type {number}
-         * @private
          */
-        this._messagesReceived = 0;
+        this.messagesReceived = 0;
 
         /**
          * Информация о пользователе
@@ -356,7 +356,7 @@ const AggroBot = class {
         this._inactivityCounter = 0;
         this._intendsToLeave = false;
 
-        this._messagesReceived++;
+        this.messagesReceived++;
         this._directResponse = true;
 
         // Смотрим, есть ли в очереди ответы, которые должны быть удалены из очереди во время получения сообщения
@@ -426,7 +426,10 @@ const AggroBot = class {
 
         // Пытаемся найти ответ по регулярному выражению или на особые типы контента
         if (request != null) switch (request.type) {
+
             case AggroBot.Request.Type.TEXT:
+
+                // Ответ на запрос фото
                 if (!this._photoSent &&
                         /(фот|селфи)[а-яё]* (себя |сво[еёию] )?(с?кин(ь|еш)|кида(й|еш)|го(?![а-я])|давай|сдела(й|еш)|(при|вы|ото)шл(и|еш)|отправ(ь|иш))|(кин|кида|([^а-яё]|^)го|дава|сдела|(при|вы|ото)шл|отправ)(и|й|еш|иш)?ь? (себя |сво[еёию] )?(фот|селфи)|сфот(к?а|огр[ао]фиру)й(ся| себя)/i.test(request.text) &&
                         !this._responseQueue.some(queued => queued.pattern == "photo_sending")) {
@@ -444,17 +447,46 @@ const AggroBot = class {
                     allowSecondary = false;
                     break;
                 }
+
+                // Ответы на реакцию на запрос подтверждения имени
+                if (typeof this._userProfile.nameConfirmationRequestedAt !== "undefined" && this.messagesReceived - this._userProfile.nameConfirmationRequestedAt <= 6) {
+                    if (/(как|откуда)( ты)?( меня)? (узнал|знаешь|угадал)|^как\??$/i.test(request.text)) {
+                        this._processAndAddToQueue(this._getMessage("name_source"), defaultOptions);
+                        this._userProfile.nameConfirmed = true;
+                        added = true;
+                        console.log("Name confirmed");
+                        break;
+                    } else if (/^да+([^а-яё]|$)|^(угадал|почти|ага)|(^конечно|почти|допустим|прикинь|возможно|а ч(то|[её]))[^а-я]*$/i.test(request.text)) {
+                        this._userProfile.nameConfirmed = true;
+                        console.log("Name confirmed");
+                        break;
+                    } else if (/^не([та\-]| верно| угадал)|^(мен)?я не /i.test(request.text)) {
+                        this._processAndAddToQueue(this._getMessage("name_incorrect"), defaultOptions);
+                        this._userProfile.name = undefined;
+                        this._userProfile.nameAskedAt = this.messagesReceived;
+                        added = true;
+                        console.log("Name rejected");
+                        break;
+                    }
+                }
+
+                // Ответы по регулярному выражению
                 const {message, pattern} = this._getAnswer(request.text);
                 if (message != null) this._processAndAddToQueue(message, Object.assign({
                     pattern: pattern
                 }, defaultOptions)) && (added = true);
+
                 break;
+
             case AggroBot.Request.Type.PHOTO:
+
                 if (!this._responseQueue.some(queued => queued.pattern == "photo")) this._processAndAddToQueue(this._getMessage("photo"), Object.assign({
                     pattern: "photo"
                 }, defaultOptions)) && (added = true);
                 break;
+
             case AggroBot.Request.Type.STICKER:
+
                 const databaseKey = `sticker_${request.stickerGroupName}`;
                 if (this._database.has(databaseKey) && !this._responseQueue.some(queued => queued.pattern == "sticker")) {
                     const message = this._getMessage(databaseKey);
@@ -463,33 +495,17 @@ const AggroBot = class {
                     }, defaultOptions)) && (added = true);
                 }
                 break;
+
         }
-        
-        // Добавляем в очередь уточнение имени собеседника, а также ответ об источнике информации и рифму к имени
+
+        // Добавляем в очередь уточнение имени собеседника, а также рифму к имени
         if (!added && ready && this._userProfile.name && !this._userProfile.nameConfirmed &&
                 Math.random() < AggroBot.getNameConfirmationProbability(this._userProfile.nameConfirmationRequests)) {
             console.log("Reporting name...");
+            this._userProfile.nameConfirmationRequests++;
             this._processAndAddToQueue(this._getMessage("name_confirmation"), defaultOptions);
-            this._userProfile.nameConfirmationRequestedAt = this._userProfile.nameAskedAt = this._messagesReceived;
+            this._userProfile.nameConfirmationRequestedAt = this._userProfile.nameAskedAt = this.messagesReceived;
             added = true;
-        }
-        if (typeof this._userProfile.nameConfirmationRequestedAt !== "undefined" && request && request.type === AggroBot.Request.Type.TEXT &&
-                this._messagesReceived - this._userProfile.nameConfirmationRequestedAt <= 5) {
-            if (/(как|откуда)( ты)?( меня)? (узнал|знаешь|угадал)/.test(request.text)) {
-                this._processAndAddToQueue(this._getMessage("name_source"), defaultOptions);
-                this._userProfile.nameConfirmed = true;
-                added = true;
-                console.log("Name confirmed");
-            } else if (/^да+([^а-яё]|$)|^(угадал|почти|ага)|(^конечно|почти|допустим|прикинь|а что)[^а-я]*$/i.test(request.text)) {
-                this._userProfile.nameConfirmed = true;
-                console.log("Name confirmed");
-            } else if (/^не([та\-]| верно| угадал)|^(мен)?я не /.test(request.text)) {
-                this._processAndAddToQueue(this._getMessage("name_incorrect"), defaultOptions);
-                this._userProfile.name = undefined;
-                this._userProfile.nameAskedAt = this._messagesReceived;
-                added = true;
-                console.log("Name rejected");
-            }
         }
         if (!added && ready && this._userProfile.nameConfirmed && !this._userProfile.nameRhymed &&
                 Math.random() < AggroBot.PROBABILITY_NAME_RHYME) {
@@ -846,7 +862,7 @@ const AggroBot = class {
                 case "timedayofweek":
                     return ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"][new Date().getDay()];
                 case "asksname":
-                    this._userProfile.nameAskedAt = this._messagesReceived;
+                    this._userProfile.nameAskedAt = this.messagesReceived;
                     break;
                 default:
                     if (typeof this._variables[name] === "string") return this._variables[name];
@@ -1038,8 +1054,8 @@ const AggroBot = class {
         // Если было написано "меня зовут", то сохраняем его без дополнительных проверок.
         // Если просто написано имя, то смотрим, спрашивал ли его бот недавно.
         const onNameMatched = matches => {
-            if (!matches[1] || this._userProfile.nameAskedAt && this._messagesReceived - this._userProfile.nameAskedAt <= 6) {
-                this._userProfile.name = matches[2];
+            if (!matches[1] || this._userProfile.nameAskedAt && this.messagesReceived - this._userProfile.nameAskedAt <= 6) {
+                this._userProfile.name = matches[2].charAt(0).toUpperCase() + matches[2].substring(1);
                 this._userProfile.nameConfirmed = true;
             }
         };
@@ -1081,7 +1097,7 @@ const AggroBot = class {
         }
 
         if (typeof name !== "undefined") {
-            name = name.substr(0, 1).toUpperCase() + name.substr(1);
+            name = name.charAt(0).toUpperCase() + name.substring(1);
             this.onReport(`Деанонимайзер: имя: ${name}`);
             this._userProfile.name = name;
         }
@@ -1287,7 +1303,7 @@ Object.assign(AggroBot, {
      * @param {number} amountOfRequests Количество запросов
      */
     getNameConfirmationProbability(amountOfRequests) {
-        return 1 / (9 * (amountOfRequests + 1));
+        return 1 / (10 * (amountOfRequests + 1));
     },
 
     /**
