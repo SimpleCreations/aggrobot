@@ -456,11 +456,11 @@ const AggroBot = class {
                         added = true;
                         console.log("Name confirmed");
                         break;
-                    } else if (/^(а+|э+м+)?[^а-я]*да+([^а-яё]|$)|^(угадал|почти|ага)|(^конечно|почти|допустим|прикинь|возможно|^ну и|^[аи] ч(то|[её]))[^а-я]*$/i.test(request.text)) {
+                    } else if (/^(а+|э+м+)?[^а-я]*да+([^а-яё]|$)|^(угадал|почти|ага)|(^конечно|именно|верно|почти|допустим|прикинь|возможно|^ну и|^[аи] ч(то|[её]))[^а-я]*$/i.test(request.text)) {
                         this._userProfile.nameConfirmed = true;
                         console.log("Name confirmed");
                         break;
-                    } else if (/^не([та\-]| верно| угадал|$)|^(мен)?я не /i.test(request.text) && !this._userProfile.nameConfirmed) {
+                    } else if (/^не([та\-]| верно| угадал|$)|^(мен)?я не |^мимо[^а-я]*$/i.test(request.text) && !this._userProfile.nameConfirmed) {
                         this._processAndAddToQueue(this._getMessage("name_incorrect"), defaultOptions);
                         this._userProfile.name = undefined;
                         this._userProfile.nameConfirmed = false;
