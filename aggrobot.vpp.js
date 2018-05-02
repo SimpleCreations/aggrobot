@@ -448,6 +448,115 @@ const AggroBot = class {
                     break;
                 }
 
+                // Ответ на запрос ВКонтакте; установка флага, если собеседник пишет, что у него нет ВКонтакте; обработка ссылки на страницу
+                if (AggroBot.vkEnabled) {
+                    let matches;
+                    if (/(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|сылку( на)?|линк(ани)?|записан)(( ты)? свой| ты| в)? (вк|vk|id|айди|одноклас+ники|фб|fb|фейсбук|facebook|телег|в(ай|и)бер|в[оа](тс|ц)ап)|(вк[оа][а-я]+|vk|id|айди|одноклас+ники|фб|fb|фейсбук|facebook|телег(у|рам+)|в(ай|и)бер|в[оа](тс|ц)ап+)( свой)? (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|с+ылку|линк)/i.test(request.text) ||
+                        /(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани) ([ст]вой|ты|сам)|([ст]вой|ты|сам) (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани)/i.test(request.text) && typeof this._userProfile.vkRequestedAt !== "undefined" && this.messagesReceived - this._userProfile.vkRequestedAt <= 6) {
+                        this._processAndAddToQueue(this._getMessage(!this._userProfile.vkSent ? "vk_response" : "vk_already_sent"), defaultOptions);
+                        added = true;
+                    } else if (/у меня (нет )?(вк|стра)/i.test(request.text) || /у меня (его )?нет/i.test(request.text) && this.messagesReceived - this._userProfile.vkRequestedAt <= 6) {
+                        this._userProfile.vkUserDoesNotHave = true;
+                    } else if (this.messagesReceived - this._userProfile.vkRequestedAt <= 6 && (matches = request.text.match(/(?:(?:https?:\/\/)?vk\.com)?(\/?id\d+|\/[a-z][\w.]{4,})/i))) {
+                        const vk = matches[1].replace("/", "");
+                        if (this._userProfile.vk) {
+                            if (this._userProfile.vk != vk) {
+                                this._processAndAddToQueue(this._getMessage("vk_another_profile"), defaultOptions);
+                                added = true;
+                            }
+                        } else if (vk == AggroBot.vkCustomURL || vk == AggroBot.vkIdURL) {
+                            this._processAndAddToQueue(this._getMessage("vk_myself"), defaultOptions);
+                            added = true;
+                        } else if (vk == "id0") {
+                            this._processAndAddToQueue(this._getMessage("vk_id0"), defaultOptions);
+                            added = true;
+                        } else {
+                            this._processAndAddToQueue(this._getMessage("vk_acknowledged"), defaultOptions);
+                            added = true;
+                            VPP.ajax({
+                                url: "https://api.vk.com/method/users.get",
+                                data: {
+                                    "lang": "ru",
+                                    "access_token": AggroBot.vkToken,
+                                    "v": "5.69",
+                                    "user_ids": vk,
+                                    "fields": "sex,photo_max_orig"
+                                },
+                                success: response => {
+                                    response = JSON.parse(response);
+                                    if (response["error"] && response["error"]["error_code"] == 113) VPP.ajax({
+                                        url: "https://vk.com/" + vk,
+                                        success: response => {
+                                            if (response == "error" || $(response).is(":contains('Страница удалена либо ещё не создана')")) {
+                                                this._processAndAddToQueue(this._getMessage("vk_does_not_exists"), defaultOptions);
+                                            } else {
+                                                this._processAndAddToQueue(this._getMessage("vk_invalid"), defaultOptions);
+                                            }
+                                        }
+                                    });
+                                    else {
+                                        this._userProfile.vk = vk;
+                                        const profile = response["response"][0];
+                                        if (profile["sex"]) {
+                                            this._userProfile.gender = profile["sex"] == 2 ? AggroBot.UserProfile.Gender.MALE : AggroBot.UserProfile.Gender.FEMALE;
+                                            this.onReport("Пол ВКонтакте: " + (profile["sex"] == 2 ? "мужской" : "женский"));
+                                        }
+                                        const name = profile["first_name"];
+                                        if (!this._userProfile.name || !(this._userProfile.nameConfirmed || this._userProfile.name == name)) {
+                                            this._userProfile.name = name;
+                                            this.onReport(`Имя ВКонтакте: ${name}`);
+                                        }
+                                        if (response["photo_max_orig"] == "https://vk.com/images/camera_400.png") {
+                                            this._processAndAddToQueue(this._getMessage("vk_no_avatar"), defaultOptions);
+                                            console.log("Profile does not have an avatar");
+                                        } else VPP.ajax({
+                                            url: "https://www.google.com/searchbyimage?hl=ru&image_url=" + response["photo_max_orig"],
+                                            headers: {
+                                                "Accept-Language": "ru;q=1"
+                                            },
+                                            success: response => {
+                                                const description = $(response).find(":contains('Скорее всего, на картинке')").last().find("a").text();
+                                                console.log(`Google's image guess: ${description}`);
+                                                if (description) VPP.ajax({
+                                                    url: "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ru&dt=t&q=" + encodeURIComponent(description),
+                                                    success: response => {
+
+                                                        const translated = JSON.parse(response)[0][0][0].toLowerCase();
+                                                        console.log(`Translated Google's image guess: ${translated}`);
+                                                        if (/^(дженте?льмен|кожаный пиджак|девушка|шапочка|мотоциклетный шлем|дружба|сидящий|стоящий|толстовка с капюшоном|селфи|пользователь|свадебное платье|деловой человек|человек|мужчина|парень|личность|свитер|военная форма)$/.test(translated)) {
+
+                                                            this._processAndAddToQueue(this._getMessage("vk_avatar_person"), defaultOptions);
+                                                            console.log(`Assuming a person`);
+
+                                                        } else {
+
+                                                            let gender = 0;
+                                                            if (/[ая]$/.test(translated)) gender = 1;
+                                                            else if (/[ое]$/.test(translated)) gender = 2;
+                                                            this._variables["vkavatarobjectgender"] = (...args) => args[gender];
+
+                                                            const accusative = translated.replace(/[ая]я?(?![а-яё])/g, match => {
+                                                                return match.replace(/а/g, "у").replace(/я/g, "ю");
+                                                            });
+                                                            this._variables["vkavatarobject"] = wordsCase => wordsCase == "accusative" ? accusative : translated;
+
+                                                            this._processAndAddToQueue(this._getMessage("vk_avatar_object"), defaultOptions);
+                                                            console.log(`Assuming an object`);
+
+                                                        }
+
+                                                    }
+                                                });
+                                            }
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
+
+
                 // Ответы на реакцию на запрос подтверждения имени
                 if (typeof this._userProfile.nameConfirmationRequestedAt !== "undefined" && this.messagesReceived - this._userProfile.nameConfirmationRequestedAt <= 6) {
                     if (/(как|откуда)( ты)?( меня)? (узнал|знаеш|угадал)|^как\??$|меня помниш/i.test(request.text)) {
@@ -520,6 +629,15 @@ const AggroBot = class {
             }
             else console.log("No rhymes to this name");
             this._userProfile.nameRhymed = true;
+        }
+
+        // Добавляем в очереди запрос ВКонтакте
+        if (AggroBot.vkEnabled && AggroBot.vkToken && !added && ready && !this._userProfile.vk && !this._userProfile.vkUserDoesNotHave &&
+                Math.random() < AggroBot.getVKRequestProbability(this._userProfile.vkRequests)) {
+            this._userProfile.vkRequests++;
+            this._processAndAddToQueue(this._getMessage("vk_request"), defaultOptions);
+            this._userProfile.vkRequestedAt = this.messagesReceived;
+            added = true;
         }
 
         // Добавялем в очередь условный ответ
@@ -825,6 +943,8 @@ const AggroBot = class {
                     return AggroBot.lastName.toLowerCase();
                 case "shortname":
                     return AggroBot.shortName.toLowerCase();
+                case "vk":
+                    return AggroBot.vkUseIdURL ? AggroBot.vkIdURL : AggroBot.vkCustomURL;
                 case "m":
                 case "match":
                     return (matches[+(args[0] || 0)] || "").toLowerCase();
@@ -1068,9 +1188,9 @@ const AggroBot = class {
         } else if (matches = message.match(/((?:я|меня(?: зовут)?) |^)(Адам|Аким|Александр|Алексей|Анатолий|Андрей|Андрю[хш]а|Антон|Аркадий|Аркаша|Арсен|Арсений|Арт[её]м|Арт[её]мий|Артур|Афанасий|Богдан|Борис|Боря|Вади[мк]|Валентин|Валерий|Ваня|Василий|Вася|Вениамин|Веня|Виктор|Витали[йк]|Витя|Влад|Владимир|Владислав|Владлен|Вовк?а|Всеволод|Всеслав|Вячеслав|Ген+адий|Гена|Георгий|Герман|Глеб|Григорий|Гриша|Давид|Даниил|Данила?|Даня|Демьян|Денис|Дима|Дмитрий|Евгений|Егор|Женя|Жора|Жорик|Захар|Иван|Игнат|Игнатий|Игорь|Ил+арион|Илья|Илю[хш]а|Инн+окентий|Иосиф|Кеша|Кирилл|Колян?|Константин|Костик|Костя|Л[её]ня|Л[её]ха|Л[её]ша|Лев|Леонид|Макар|Макс|Максим|Марат|Марк|Матвей|Мирослав|Миха|Михаил|Миша|Никита|Николай|Олег|П[её]тр|Павел|Паша|Петя|Платон|Р[еи]нат|Радислав|Роберт|Родион|Рома|Роман|Ростислав|Руслан|С[её]ма|Сав+а|Савелий|Саша|Святослав|Сем[её]н|Сеня|Сер[её][гж]а|Серафим|Сергей|Славк?а|Ст[её]па|Станислав|Стас|Степан|Тима|Тимофей|Тимур|Толик|Толя|Тоха|Ф[её]дор|Федя|Феликс|Филипп|Филя|Эдик|Эдуард|Эмиль|Эрик|Эрнест|Юлий|Юра|Юрий|Яков|Ян|Ярослав|Назар|Гоша|Славик|[ЭИ]льдар)(?:[^а-яё?]|$)/i)) {
             gender = AggroBot.UserProfile.Gender.MALE;
             onNameMatched(matches);
-        } else if (/((^[^а-яё]*я? ?|([^а-я]|^)я (([а-мо-яё]|н(?!е))+[ \-])*)([жд](?=$| ?[.,])|дев(оч|ч[ео]н|уш)ка|женщина|женского|баба|телка|тянк?а?)|(^|[^а-яё])я (бы )?[а-яё]{3,}(ая|[кл]а))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я (ведь )?не (м|парень?|пацан|мальчик|муж(ик|чина)?|чувак)($|[^а-яё])|у меня нет (хуя|члена|яиц)/i.test(message)) {
+        } else if (/((^[^а-яё]*я? ?|([^а-я]|^)я (([а-мо-яё]|н(?!е))+[ \-])*)([жд](?=$| ?[.,])|дев(оч|ч[ео]н|уш)ка|женщина|женского|баба|телка|тянк?а?)|(^|[^а-яё])я (бы )?[а-яё]{3,}(ая|[кл]а))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я (ведь )?не (м|парень?|пацан|мальчик|муж(ик|чина)?|чувак)($|[^а-яё])|у меня нет (хуя|члена|яиц)/i.test(message) && !/^почему/i.test(message)) {
             gender = AggroBot.UserProfile.Gender.FEMALE;
-        } else if (/((^[^а-яё]*я? ?|([^а-я]|^)я (([а-мо-яё]|н(?!е))+[ \-])*)(м|парень?|пацан|мальчик|муж(ик|чина|ского)?)|(^|[^а-яё])я (бы )?[а-яё]{2,}(ый|л))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я (ведь )?не ([жд]|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)($|[^а-яё])/i.test(message)) {
+        } else if (/((^[^а-яё]*я? ?|([^а-я]|^)я (([а-мо-яё]|н(?!е))+[ \-])*)(м|парень?|пацан|мальчик|муж(ик|чина|ского)?)|(^|[^а-яё])я (бы )?[а-яё]{2,}(ый|л))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я (ведь )?не ([жд]|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)($|[^а-яё])/i.test(message) && !/^почему/i.test(message)) {
             gender = AggroBot.UserProfile.Gender.MALE;
         }
 
@@ -1274,9 +1394,14 @@ Object.assign(AggroBot, {
     vkEnabled: VPPScript.storage.get("vkEnabled") || true,
 
     /**
+     * Токен API ВКонтакте
+     */
+    vkToken: VPPScript.storage.get("vkToken") || undefined,
+
+    /**
      * Короткая ссылка на профиль ВКонтакте бота
      */
-    vkCustomURL: "4etkiy_poz",
+    vkCustomURL: "4etkiy_poz",// toxa4etkiy
 
     /**
      * Ссылка на профиль ВКонтакте бота с ID
@@ -1310,7 +1435,15 @@ Object.assign(AggroBot, {
     /**
      * Вероятность того, что бот придумает рифму к имени собеседника
      */
-    PROBABILITY_NAME_RHYME: 1
+    PROBABILITY_NAME_RHYME: 1,
+
+    /**
+     * Получает вероятность того, что бот попросит ВКонтакте у собеседника
+     * @param {number} amountOfRequests Количество запросов
+     */
+    getVKRequestProbability(amountOfRequests) {
+        return 1 / (20 * (amountOfRequests / 2 + 1));
+    }
 
 });
 
@@ -1872,6 +2005,36 @@ AggroBot.UserProfile = class {
          * @type {number}
          */
         this.nameAskedAt = undefined;
+
+        /**
+         * Каким по порядку сообщением бот спросил ВКонтакте у собеседника
+         * @type {number}
+         */
+        this.vkRequestedAt = undefined;
+
+        /**
+         * Количество запросов ВКонтакте от бота
+         * @type {number}
+         */
+        this.vkRequests = 0;
+
+        /**
+         * Отправил ли бот ссылку на свой профиль ВКонтакте
+         * @type {boolean}
+         */
+        this.vkSent = false;
+
+        /**
+         * Ссылка на ВКонтакте собседника
+         * @type {undefined}
+         */
+        this.vk = undefined;
+
+        /**
+         * true, если у собеседника нет ВКонтакте
+         * @type {boolean}
+         */
+        this.vkUserDoesNotHave = false;
 
     }
 
