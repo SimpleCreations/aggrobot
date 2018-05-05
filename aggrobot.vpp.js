@@ -455,7 +455,8 @@ const AggroBot = class {
                         /(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани) ([ст]вой|ты|сам)|([ст]вой|ты|сам) (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани)/i.test(request.text) && typeof this._userProfile.vkRequestedAt !== "undefined" && this.messagesReceived - this._userProfile.vkRequestedAt <= 6) {
                         this._processAndAddToQueue(this._getMessage(!this._userProfile.vkSent ? "vk_response" : "vk_already_sent"), defaultOptions);
                         added = true;
-                    } else if (/у меня (нет )?(вк|стра)/i.test(request.text) || /у меня (его )?нет/i.test(request.text) && this.messagesReceived - this._userProfile.vkRequestedAt <= 6) {
+                    } else if (/(у )?меня (нет )?(в )?(вк|стра)|^нет вк/i.test(request.text) || /у меня (его )?нет|не зарег/i.test(request.text) && this.messagesReceived - this._userProfile.vkRequestedAt <= 6) {
+                        console.log("User does not have VK profile");
                         this._userProfile.vkUserDoesNotHave = true;
                     } else if (this.messagesReceived - this._userProfile.vkRequestedAt <= 6 && (matches = request.text.match(/(?:(?:https?:\/\/)?vk\.com)?(\/?id\d+|\/[a-z][\w.]{4,})/i))) {
                         const vk = matches[1].replace("/", "");
@@ -565,7 +566,7 @@ const AggroBot = class {
                         added = true;
                         console.log("Name confirmed");
                         break;
-                    } else if (/^(а+|э+м+)?[^а-я]*да+([^а-яё]|$)|^(угадал|почти|ага)|(^конечно|именно|верно|почти|допустим|прикинь|возможно|^ну и|^[аи] ч(то|[её]))[^а-я]*$|^\+$/i.test(request.text)) {
+                    } else if (/^(а+|э+м+)?[^а-я]*да+([^а-яё]|$)|^(угадал|почти|ага)|(^конечно|именно|верно|почти|допустим|прикинь|возможно|^ну и|^[аи] ч(то|[её]))[^а-я]*$|^(\+|ну)$/i.test(request.text)) {
                         this._userProfile.nameConfirmed = true;
                         console.log("Name confirmed");
                         break;
@@ -944,7 +945,7 @@ const AggroBot = class {
                 case "shortname":
                     return AggroBot.shortName.toLowerCase();
                 case "vk":
-                    return AggroBot.vkUseIdURL ? AggroBot.vkIdURL : AggroBot.vkCustomURL;
+                    return "https://vk.com/" + (AggroBot.vkUseIdURL ? AggroBot.vkIdURL : AggroBot.vkCustomURL);
                 case "m":
                 case "match":
                     return (matches[+(args[0] || 0)] || "").toLowerCase();
@@ -1176,7 +1177,7 @@ const AggroBot = class {
         // Если просто написано имя, то смотрим, спрашивал ли его бот недавно.
         const onNameMatched = matches => {
             if (!matches[1] || this._userProfile.nameAskedAt && this.messagesReceived - this._userProfile.nameAskedAt <= 6) {
-                this._userProfile.name = matches[2].charAt(0).toUpperCase() + matches[2].substring(1);
+                this._userProfile.name = matches[2].charAt(0).toUpperCase() + matches[2].substring(1).toLowerCase();
                 this._userProfile.nameConfirmed = true;
             }
         };
