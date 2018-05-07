@@ -451,14 +451,14 @@ const AggroBot = class {
                 // Ответ на запрос ВКонтакте; установка флага, если собеседник пишет, что у него нет ВКонтакте; обработка ссылки на страницу
                 if (AggroBot.vkEnabled) {
                     let matches;
-                    if (/(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|сылку( на)?|линк(ани)?|записан)(( ты)? свой| ты| в)? (вк|vk|id|айди|одноклас+ники|фб|fb|фейсбук|facebook|телег|в(ай|и)бер|в[оа](тс|ц)ап)|(вк[оа][а-я]+|vk|id|айди|одноклас+ники|фб|fb|фейсбук|facebook|телег(у|рам+)|в(ай|и)бер|в[оа](тс|ц)ап+)( свой)? (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|с+ылку|линк)/i.test(request.text) ||
-                        /(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани) ([ст]вой|ты|сам)|([ст]вой|ты|сам) (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани)/i.test(request.text) && typeof this._userProfile.vkRequestedAt !== "undefined" && this.messagesReceived - this._userProfile.vkRequestedAt <= 6) {
+                    if (/(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|сыл(ку|ь)( на)?|линк(ани)?|записан)(( ты)? свой| ты| в)? (вк|vk|id|айди|одноклас+ники|фб|fb|фейсбук|facebook|телег|в(ай|и)бер|в[оа](тс|ц)ап)|(вк[оа][а-я]+|vk|id|айди|одноклас+ники|фб|fb|фейсбук|facebook|телег(у|рам+)|в(ай|и)бер|в[оа](тс|ц)ап+)( свой)? (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|с+ыл(ку|ь)|линк)/i.test(request.text) ||
+                        /(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|лучше) ([ст]вой|ты|сам|с+ыл(ку|ь))|([ст]вой|ты|сам|сыл(ку|ь)) (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|лучше)/i.test(request.text) && typeof this._userProfile.vkRequestedAt !== "undefined" && this.messagesReceived - this._userProfile.vkRequestedAt <= 6) {
                         this._processAndAddToQueue(this._getMessage(!this._userProfile.vkSent ? "vk_response" : "vk_already_sent"), defaultOptions);
                         added = true;
-                    } else if (/(у )?меня (нет )?(в )?(вк|стра)|^нет вк/i.test(request.text) || /у меня (его )?нет|не зарег/i.test(request.text) && this.messagesReceived - this._userProfile.vkRequestedAt <= 6) {
+                    } else if (/(у )?меня (нет )?(в )?(вк|стра)|^нет вк/i.test(request.text) || /у меня (его )?нет|не зарег|^нету$|не сижу/i.test(request.text) && this.messagesReceived - this._userProfile.vkRequestedAt <= 6) {
                         console.log("User does not have VK profile");
                         this._userProfile.vkUserDoesNotHave = true;
-                    } else if (this.messagesReceived - this._userProfile.vkRequestedAt <= 6 && (matches = request.text.match(/(?:(?:https?:\/\/)?vk\.com)?(\/?id\d+|\/[a-z][\w.]{4,})/i))) {
+                    } else if (this.messagesReceived - this._userProfile.vkRequestedAt <= 10 && (matches = request.text.match(/(?:(?:https?:\/\/)?vk\.com)?(\/?id\d+|\/[a-z][\w.]{4,})/i))) {
                         const vk = matches[1].replace("/", "");
                         if (this._userProfile.vk) {
                             if (this._userProfile.vk != vk) {
@@ -560,13 +560,13 @@ const AggroBot = class {
 
                 // Ответы на реакцию на запрос подтверждения имени
                 if (typeof this._userProfile.nameConfirmationRequestedAt !== "undefined" && this.messagesReceived - this._userProfile.nameConfirmationRequestedAt <= 6) {
-                    if (/(как|откуда)( ты)?( меня)? (узнал|знаеш|угадал)|^как\??$|меня помниш/i.test(request.text)) {
+                    if (this._userProfile.name && /(как|откуда)( ты)?( меня)? (узнал|знаеш|угадал)|^как\??$|меня помниш/i.test(request.text)) {
                         this._processAndAddToQueue(this._getMessage("name_source"), defaultOptions);
                         this._userProfile.nameConfirmed = true;
                         added = true;
                         console.log("Name confirmed");
                         break;
-                    } else if (/^(а+|э+м+)?[^а-я]*да+([^а-яё]|$)|^(угадал|почти|ага)|(^конечно|именно|верно|почти|допустим|прикинь|возможно|^ну и|^[аи] ч(то|[её]))[^а-я]*$|^(\+|ну)$/i.test(request.text)) {
+                    } else if (/^(а+|э+м+)?[^а-я]*да+([^а-яё]|$)|[^н]. угадал|^(угадал|почти|ага)|(^конечно|именно|верно|почти|допустим|прикинь|возможно|^а ч(то|[её])|^(ну )?и (что|ч[её])?)[^а-я]*$|^(\+|ну)$/i.test(request.text)) {
                         this._userProfile.nameConfirmed = true;
                         console.log("Name confirmed");
                         break;
@@ -972,7 +972,7 @@ const AggroBot = class {
                 }
                 case "timehour": {
                     const now = new Date();
-                    return (now.getHours() + (now.getMinutes() > 25)) % 24 || 12;
+                    return (now.getHours() + (now.getMinutes() > 25)) % 12 || 12;
                 }
                 case "timeofday": {
                     const now = new Date();
@@ -1159,7 +1159,8 @@ const AggroBot = class {
 
         // Добавляем заглавные буквы
         if (this._style.capitalize) typosResult.forEach(queued =>
-            queued.message = queued.message[0].toUpperCase() + queued.message.substring(1));
+            queued.message.indexOf("http") != 0 &&
+                (queued.message = queued.message.charAt(0).toUpperCase() + queued.message.substring(1)));
 
         return typosResult;
 
