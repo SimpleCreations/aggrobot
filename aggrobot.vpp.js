@@ -96,7 +96,12 @@ const enableScript = () => {
         chat.addEventListener(VPP.Chat.Event.CONNECTED, "aggrobot", () => {
 
             // Генерируем новое состояние бота и готовим приветственное сообщение
-            aggroBot.reset();
+            chat.messageSent = false;
+            chat.aggrobotWasActive = false;
+            if (AggroBot.autoStart) {
+                aggroBot.reset();
+                chat.aggrobotWasActive = true;
+            }
 
             // Обращаемся к деанонимайзеру
             if (AggroBot.deanonEnabled && AggroBot.deanonURL) {
@@ -138,11 +143,13 @@ const enableScript = () => {
             }
 
             // Иначе просто готовим приветствие
-            else aggroBot.prepareResponse();
+            else if (aggroBot.active) aggroBot.prepareResponse();
 
         });
 
         chat.addEventListener(VPP.Chat.Event.MESSAGE_RECEIVED, "aggrobot", (type, content) => {
+
+            if (!aggroBot.active) return;
 
             let request;
             switch (type) {
@@ -166,11 +173,15 @@ const enableScript = () => {
                     break;
             }
             aggroBot.receiveMessage(request);
-            aggroBot.prepareResponse(request);
+            aggroBot.prepareResponse(request, chat.messageSent);
 
         });
 
+        chat.addEventListener(VPP.Chat.Event.MESSAGE_DELIVERED, "aggrobot", () => chat.messageSent = true);
+
         chat.addEventListener(VPP.Chat.Event.USER_STARTED_TYPING, "aggrobot", () => {
+
+            if (!aggroBot.active) return;
 
             // Если собеседник начал печатать во время ответа бота, бот на короткое время "отвлекается" от набора текста
             aggroBot.waitForOpponent();
@@ -180,7 +191,7 @@ const enableScript = () => {
         chat.addEventListener(VPP.Chat.Event.DISCONNECTED, "aggrobot", () => {
 
             chat.setFinishedTyping();
-            aggroBot.suspend();
+            if (aggroBot.active) aggroBot.suspend();
 
         });
 
@@ -198,6 +209,12 @@ const AggroBot = class {
         this.suspend();
 
         if (this._database) this._database.reset();
+
+        /**
+         * Работает ли бот
+         * @type {boolean}
+         */
+        this.active = true;
 
         /**
          * ID таймеров различных откладываемых действий
@@ -328,10 +345,11 @@ const AggroBot = class {
     }
 
     /**
-     * Останавливает работу бота
+     * Приостанавливает работу бота
      */
     suspend() {
 
+        this.active = false;
         clearTimeout(this._readTimeout);
         this._readTimeout = null;
         clearTimeout(this._typeTimeout);
@@ -340,6 +358,16 @@ const AggroBot = class {
         this._interruptedTimeout = null;
         clearTimeout(this._activityCheckTimeout);
         this._activityCheckTimeout = null;
+
+    }
+
+    /**
+     * Возобновляет работу бота
+     */
+    resume() {
+
+        this.active = true;
+        this._clearQueue();
 
     }
 
@@ -403,18 +431,21 @@ const AggroBot = class {
     /**
      * Готовит и откладывает ответ собеседнику
      * @param {AggroBot.Request} request Сообщение от собеседника
+     * @param {boolean} withoutGreeting Нужно ли пропустить приветствие
      */
-    prepareResponse(request = null) {
+    prepareResponse(request = null, withoutGreeting = false) {
 
         if (this._ignoringPrepareRequests || request != null && this._spamRequest == request) return;
 
         // Отправляем приветствие
         if (!this._greeted) {
             this._greeted = true;
-            this._processAndAddToQueue(this._getMessage("greetings"), {
-                discardOnMessage: true
-            });
-            return;
+            if (!withoutGreeting) {
+                this._processAndAddToQueue(this._getMessage("greetings"), {
+                    discardOnMessage: true
+                });
+                return;
+            }
         }
 
         // Проверяем, занят ли бот
@@ -1364,6 +1395,11 @@ Object.assign(AggroBot, {
         }
 
     },
+
+    /**
+     * Включать ли бота в начале диалога
+     */
+    autoStart: VPPScript.storage.get("autoStart") || true,
 
     /**
      * Внутреннее имя бота
@@ -2747,7 +2783,7 @@ Object.assign(AggroBot.SpamDetector, {
 
 AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP = new RegExp(`([^а-яё]|^)(${AggroBot.SpamDetector.COMMON_WORDS.join("|")})([^а-яё]|$)|(${AggroBot.SpamDetector.COMMON_LETTER_COMBINATIONS.join("|")})`, "i");
 
-VPP.Chat.prototype.aggrobot = (command, ...args) => {
+VPP.Chat.prototype.aggrobot = function(command, ...args) {
 
     command = command.split(" ")[0];
     switch (command) {
@@ -2761,6 +2797,19 @@ VPP.Chat.prototype.aggrobot = (command, ...args) => {
             $a[0].click();
             $a.remove();
 
+            break;
+
+        case "pause":
+
+            if (this.aggroBot.active) this.aggroBot.suspend();
+            break;
+
+        case "resume":
+
+            if (!this.aggroBot.active) {
+                if (!this.aggrobotWasActive) this.aggroBot.reset();
+                else this.aggroBot.resume();
+            }
             break;
 
         default:
