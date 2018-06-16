@@ -482,11 +482,11 @@ const AggroBot = class {
                 // Ответ на запрос ВКонтакте; установка флага, если собеседник пишет, что у него нет ВКонтакте; обработка ссылки на страницу
                 if (AggroBot.vkEnabled) {
                     let matches;
-                    if (/(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|сыл(ку|ь)( на)?|линк(ани)?|записан)(( ты)? свой| ты| в)? (вк|vk|id|айди|одноклас+ники|фб|fb|фейсбук|facebook|телег|в(ай|и)бер|в[оа](тс|ц)ап)|(вк[оа][а-я]+|vk|id|айди|одноклас+ники|фб|fb|фейсбук|facebook|телег(у|рам+)|в(ай|и)бер|в[оа](тс|ц)ап+)( свой)? (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|с+ыл(ку|ь)|линк)/i.test(request.text) ||
-                        /(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|лучше) ([ст]во[ейю]|ты|сам|с+ыл(ку|ь))|([ст]во[ейю]|ты|сам|сыл(ку|ь)) (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|лучше|первы[йм])/i.test(request.text) && typeof this._userProfile.vkRequestedAt !== "undefined" && this.messagesReceived - this._userProfile.vkRequestedAt <= 6) {
+                    if (/(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|сыл(ку|ь)( на)?|линк(ани)?|записан|может)(( ты)? свой| ты| в)? (вк|vk|id|ай ?[дп]и|одноклас+ники|фб|fb|фейсбук|facebook|телег|в(ай|и)бер|в[оа](тс|ц)ап)|(вк[оа][а-я]+|vk|id|ай ?[дп]и|одноклас+ники|фб|fb|фейсбук|facebook|телег(у|рам+)|в(ай|и)бер|в[оа](тс|ц)ап+)( свой)? (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|с+ыл(ку|ь)|линк)/i.test(request.text) ||
+                        /(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|лучше)([\- ]?ка)? ([ст]во[ейю]|ты|сам|с+ыл(ку|ь))|([ст]во[ейю]|ты|сам|сыл(ку|ь)) (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|лучше|первы[йм])/i.test(request.text) && typeof this._userProfile.vkRequestedAt !== "undefined" && this.messagesReceived - this._userProfile.vkRequestedAt <= 6) {
                         this._processAndAddToQueue(this._getMessage(!this._userProfile.vkSent ? "vk_response" : "vk_already_sent"), defaultOptions);
                         added = true;
-                    } else if (/(у )?меня (нет )?(в )?(вк|стра)|^нет вк/i.test(request.text) || /у меня (его )?нет|не зарег|^нету$|не сижу/i.test(request.text) && this.messagesReceived - this._userProfile.vkRequestedAt <= 6) {
+                    } else if (/(у )?меня (нет )?(в )?(вк|стра)|^нету? вк|^(а )?вк нет/i.test(request.text) || /(у меня (его )?|меня там )нет|не зарег|^нету$|не сижу/i.test(request.text) && this.messagesReceived - this._userProfile.vkRequestedAt <= 6) {
                         console.log("User does not have VK profile");
                         this._userProfile.vkUserDoesNotHave = true;
                     } else if (this.messagesReceived - this._userProfile.vkRequestedAt <= 10 && (matches = request.text.match(/(?:(?:https?:\/\/)?vk\.com)?(\/?id\d+|\/[a-z][\w.]{4,})/i))) {
@@ -538,11 +538,11 @@ const AggroBot = class {
                                             this._userProfile.name = name;
                                             this.onReport(`Имя ВКонтакте: ${name}`);
                                         }
-                                        if (response["photo_max_orig"] == "https://vk.com/images/camera_400.png") {
+                                        if (profile["photo_max_orig"] == "https://vk.com/images/camera_400.png") {
                                             this._processAndAddToQueue(this._getMessage("vk_no_avatar"), defaultOptions);
                                             console.log("Profile does not have an avatar");
                                         } else VPP.ajax({
-                                            url: "https://www.google.com/searchbyimage?hl=ru&image_url=" + response["photo_max_orig"],
+                                            url: "https://www.google.com/searchbyimage?hl=ru&image_url=" + profile["photo_max_orig"],
                                             headers: {
                                                 "Accept-Language": "ru;q=1"
                                             },
