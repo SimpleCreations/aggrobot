@@ -483,107 +483,78 @@ const AggroBot = class {
                 if (AggroBot.vkEnabled) {
                     let matches;
                     if (/(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|сыл(ку|ь)( на)?|линк(ани)?|записан|может)(( ты)? свой| ты| в)? (вк|vk|id|ай ?[дп]и|одноклас+ники|фб|fb|фейсбук|facebook|телег|в(ай|и)бер|в[оа](тс|ц)ап)|(вк[оа][а-я]+|vk|id|ай ?[дп]и|одноклас+ники|фб|fb|фейсбук|facebook|телег(у|рам+)|в(ай|и)бер|в[оа](тс|ц)ап+)( свой)? (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|с+ыл(ку|ь)|линк)/i.test(request.text) ||
-                        /(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|лучше)([\- ]?ка)? ([ст]во[ейю]|ты|сам|с+ыл(ку|ь))|([ст]во[ейю]|ты|сам|сыл(ку|ь)) (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|лучше|первы[йм])/i.test(request.text) && typeof this._userProfile.vkRequestedAt !== "undefined" && this.messagesReceived - this._userProfile.vkRequestedAt <= 6) {
-                        this._processAndAddToQueue(this._getMessage(!this._userProfile.vkSent ? "vk_response" : "vk_already_sent"), defaultOptions);
+                        /(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|лучше)([\- ]?ка)? ([ст]во[ейю]|ты|сам|с+ыл(ку|ь))|([ст]во[ейю]|ты|сам|сыл(ку|ь)) (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|лучше|первы[йм])/i.test(request.text) && typeof this._userProfile.vk.requestedAt !== "undefined" && this.messagesReceived - this._userProfile.vk.requestedAt <= 6) {
+                        this._processAndAddToQueue(this._getMessage(!this._userProfile.vk.sent ? "vk_response" : "vk_already_sent"), defaultOptions);
                         added = true;
-                    } else if (/(у )?меня (нет )?(в )?(вк|стра)|^нету? вк|^(а )?вк нет/i.test(request.text) || /(у меня (его )?|меня там )нет|не зарег|^нету$|не сижу/i.test(request.text) && this.messagesReceived - this._userProfile.vkRequestedAt <= 6) {
+                    } else if (/(у )?меня (нет )?(в |на )?(вк|стра)|^нету? (вк|страницы)|^(а )?вк нет/i.test(request.text) || /(у меня (его )?|меня там )нет|не зарег|^нету$|не сижу/i.test(request.text) && this.messagesReceived - this._userProfile.vk.requestedAt <= 6) {
                         console.log("User does not have VK profile");
-                        this._userProfile.vkUserDoesNotHave = true;
-                    } else if (this.messagesReceived - this._userProfile.vkRequestedAt <= 10 && (matches = request.text.match(/(?:(?:https?:\/\/)?vk\.com)?(\/?id\d+|\/[a-z][\w.]{4,})/i))) {
+                        this._userProfile.vk.userDoesNotHave = true;
+                    } else if (this.messagesReceived - this._userProfile.vk.requestedAt <= 10 && (matches = request.text.match(/(?:(?:https?:\/\/)?vk\.com)?(\/?id\d+|\/[a-z][\w.]{4,})/i))) {
                         const vk = matches[1].replace("/", "");
-                        if (this._userProfile.vk) {
-                            if (this._userProfile.vk != vk) {
-                                this._processAndAddToQueue(this._getMessage("vk_another_profile"), defaultOptions);
-                                added = true;
+                        this._userProfile.vk.processURL(vk).then(({name, gender, avatarContents, avatarDescription}) => {
+
+                            if (gender !== undefined) {
+                                this._userProfile.gender = gender;
+                                this.onReport("Пол ВКонтакте: " + (gender === AggroBot.UserProfile.Gender.MALE ? "мужской" : "женский"));
                             }
-                        } else if (vk == AggroBot.vkCustomURL || vk == AggroBot.vkIdURL) {
-                            this._processAndAddToQueue(this._getMessage("vk_myself"), defaultOptions);
-                            added = true;
-                        } else if (vk == "id0") {
-                            this._processAndAddToQueue(this._getMessage("vk_id0"), defaultOptions);
-                            added = true;
-                        } else {
+                            if (!this._userProfile.name || !(this._userProfile.nameConfirmed || this._userProfile.name == name)) {
+                                this._userProfile.name = name;
+                                this.onReport(`Имя ВКонтакте: ${name}`);
+                            }
+
+                            switch (avatarContents) {
+
+                                case AggroBot.VK.AvatarContents.PERSON:
+
+                                    this._processAndAddToQueue(this._getMessage("vk_avatar_person"), defaultOptions);
+                                    console.log(`Assuming a person`);
+
+                                    break;
+
+                                case AggroBot.VK.AvatarContents.OBJECT:
+
+                                    let gender = 0;
+                                    if (/[ая]$/.test(avatarDescription)) gender = 1;
+                                    else if (/[ое]$/.test(avatarDescription)) gender = 2;
+                                    this._variables["vkavatarobjectgender"] = (...args) => args[gender];
+
+                                    const accusative = avatarDescription.replace(/[ая]я?(?![а-яё])/g, match => {
+                                        return match.replace(/а/g, "у").replace(/я/g, "ю");
+                                    });
+                                    this._variables["vkavatarobject"] = wordsCase => wordsCase == "accusative" ? accusative : avatarDescription;
+
+                                    this._processAndAddToQueue(this._getMessage("vk_avatar_object"), defaultOptions);
+                                    console.log(`Assuming an object`);
+
+                                    break;
+
+                                case AggroBot.VK.AvatarContents.NONE:
+
+                                    this._processAndAddToQueue(this._getMessage("vk_no_avatar"), defaultOptions);
+                                    console.log("Profile does not have an avatar");
+
+                            }
+
+                        }).catch(error => {
+
+                            let databaseKey;
+                            switch (error) {
+                                case AggroBot.VK.Error.ANOTHER_PROFILE: databaseKey = "vk_another_profile"; break;
+                                case AggroBot.VK.Error.BOT_PROFILE: databaseKey = "vk_myself"; break;
+                                case AggroBot.VK.Error.ID_0: databaseKey = "vk_id0"; break;
+                                case AggroBot.VK.Error.PROFILE_DOES_NOT_EXIST: databaseKey = "vk_does_not_exist"; break;
+                                case AggroBot.VK.Error.URL_INVALID: databaseKey = "vk_invalid"; break;
+                                default: console.log(error);
+                            }
+                            if (databaseKey) {
+                                added = true;
+                                this._processAndAddToQueue(this._getMessage(databaseKey), defaultOptions);
+                            }
+
+                        });
+                        if (!added) {
                             this._processAndAddToQueue(this._getMessage("vk_acknowledged"), defaultOptions);
                             added = true;
-                            VPP.ajax({
-                                url: "https://api.vk.com/method/users.get",
-                                data: {
-                                    "lang": "ru",
-                                    "access_token": AggroBot.vkToken,
-                                    "v": "5.69",
-                                    "user_ids": vk,
-                                    "fields": "sex,photo_max_orig"
-                                },
-                                success: response => {
-                                    response = JSON.parse(response);
-                                    if (response["error"] && response["error"]["error_code"] == 113) VPP.ajax({
-                                        url: "https://vk.com/" + vk,
-                                        success: response => {
-                                            if (response == "error" || $(response).is(":contains('Страница удалена либо ещё не создана')")) {
-                                                this._processAndAddToQueue(this._getMessage("vk_does_not_exists"), defaultOptions);
-                                            } else {
-                                                this._processAndAddToQueue(this._getMessage("vk_invalid"), defaultOptions);
-                                            }
-                                        }
-                                    });
-                                    else {
-                                        this._userProfile.vk = vk;
-                                        const profile = response["response"][0];
-                                        if (profile["sex"]) {
-                                            this._userProfile.gender = profile["sex"] == 2 ? AggroBot.UserProfile.Gender.MALE : AggroBot.UserProfile.Gender.FEMALE;
-                                            this.onReport("Пол ВКонтакте: " + (profile["sex"] == 2 ? "мужской" : "женский"));
-                                        }
-                                        const name = profile["first_name"];
-                                        if (!this._userProfile.name || !(this._userProfile.nameConfirmed || this._userProfile.name == name)) {
-                                            this._userProfile.name = name;
-                                            this.onReport(`Имя ВКонтакте: ${name}`);
-                                        }
-                                        if (profile["photo_max_orig"] == "https://vk.com/images/camera_400.png") {
-                                            this._processAndAddToQueue(this._getMessage("vk_no_avatar"), defaultOptions);
-                                            console.log("Profile does not have an avatar");
-                                        } else VPP.ajax({
-                                            url: "https://www.google.com/searchbyimage?hl=ru&image_url=" + profile["photo_max_orig"],
-                                            headers: {
-                                                "Accept-Language": "ru;q=1"
-                                            },
-                                            success: response => {
-                                                const description = $(response).find(":contains('Скорее всего, на картинке')").last().find("a").text();
-                                                console.log(`Google's image guess: ${description}`);
-                                                if (description) VPP.ajax({
-                                                    url: "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ru&dt=t&q=" + encodeURIComponent(description),
-                                                    success: response => {
-
-                                                        const translated = JSON.parse(response)[0][0][0].toLowerCase();
-                                                        console.log(`Translated Google's image guess: ${translated}`);
-                                                        if (/^(дженте?льмен|кожаный пиджак|девушка|шапочка|мотоциклетный шлем|дружба|сидящий|стоящий|толстовка с капюшоном|селфи|пользователь|свадебное платье|деловой человек|человек|мужчина|парень|личность|свитер|военная форма)$/.test(translated)) {
-
-                                                            this._processAndAddToQueue(this._getMessage("vk_avatar_person"), defaultOptions);
-                                                            console.log(`Assuming a person`);
-
-                                                        } else {
-
-                                                            let gender = 0;
-                                                            if (/[ая]$/.test(translated)) gender = 1;
-                                                            else if (/[ое]$/.test(translated)) gender = 2;
-                                                            this._variables["vkavatarobjectgender"] = (...args) => args[gender];
-
-                                                            const accusative = translated.replace(/[ая]я?(?![а-яё])/g, match => {
-                                                                return match.replace(/а/g, "у").replace(/я/g, "ю");
-                                                            });
-                                                            this._variables["vkavatarobject"] = wordsCase => wordsCase == "accusative" ? accusative : translated;
-
-                                                            this._processAndAddToQueue(this._getMessage("vk_avatar_object"), defaultOptions);
-                                                            console.log(`Assuming an object`);
-
-                                                        }
-
-                                                    }
-                                                });
-                                            }
-                                        });
-                                    }
-                                }
-                            });
                         }
                     }
                 }
@@ -664,11 +635,11 @@ const AggroBot = class {
         }
 
         // Добавляем в очереди запрос ВКонтакте
-        if (AggroBot.vkEnabled && AggroBot.vkToken && !added && ready && !this._userProfile.vk && !this._userProfile.vkUserDoesNotHave &&
-                Math.random() < AggroBot.getVKRequestProbability(this._userProfile.vkRequests)) {
-            this._userProfile.vkRequests++;
+        if (AggroBot.vkEnabled && AggroBot.vkToken && !added && ready && !this._userProfile.vk.url && !this._userProfile.vk.userDoesNotHave &&
+                Math.random() < AggroBot.getVKRequestProbability(this._userProfile.vk.requests)) {
+            this._userProfile.vk.requests++;
             this._processAndAddToQueue(this._getMessage("vk_request"), defaultOptions);
-            this._userProfile.vkRequestedAt = this.messagesReceived;
+            this._userProfile.vk.requestedAt = this.messagesReceived;
             added = true;
         }
 
@@ -2045,34 +2016,10 @@ AggroBot.UserProfile = class {
         this.nameAskedAt = undefined;
 
         /**
-         * Каким по порядку сообщением бот спросил ВКонтакте у собеседника
-         * @type {number}
+         * ВКонтакте собседника
+         * @type {AggroBot.VK}
          */
-        this.vkRequestedAt = undefined;
-
-        /**
-         * Количество запросов ВКонтакте от бота
-         * @type {number}
-         */
-        this.vkRequests = 0;
-
-        /**
-         * Отправил ли бот ссылку на свой профиль ВКонтакте
-         * @type {boolean}
-         */
-        this.vkSent = false;
-
-        /**
-         * Ссылка на ВКонтакте собседника
-         * @type {undefined}
-         */
-        this.vk = undefined;
-
-        /**
-         * true, если у собеседника нет ВКонтакте
-         * @type {boolean}
-         */
-        this.vkUserDoesNotHave = false;
+        this.vk = new AggroBot.VK();
 
     }
 
@@ -2782,6 +2729,200 @@ Object.assign(AggroBot.SpamDetector, {
 });
 
 AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP = new RegExp(`([^а-яё]|^)(${AggroBot.SpamDetector.COMMON_WORDS.join("|")})([^а-яё]|$)|(${AggroBot.SpamDetector.COMMON_LETTER_COMBINATIONS.join("|")})`, "i");
+
+/**
+ * Представляет профиль ВКонтакте собеседника
+ * @class
+ */
+AggroBot.VK = class {
+
+    constructor() {
+
+        /**
+         * Каким по порядку сообщением бот спросил ВКонтакте у собеседника
+         * @type {number}
+         */
+        this.requestedAt = undefined;
+
+        /**
+         * Количество запросов ВКонтакте от бота
+         * @type {number}
+         */
+        this.requests = 0;
+
+        /**
+         * Отправил ли бот ссылку на свой профиль ВКонтакте
+         * @type {boolean}
+         */
+        this.sent = false;
+
+        /**
+         * Ссылка на ВКонтакте собседника
+         * @type {string}
+         */
+        this.url = undefined;
+
+        /**
+         * true, если у собеседника нет ВКонтакте
+         * @type {boolean}
+         */
+        this.userDoesNotHave = false;
+
+    }
+
+    /**
+     * Обрабатывает полученный от собеседника профиль ВКонтакте по ссылке
+     * @param url
+     * @returns {Promise<{name: string, gender: number, avatarContents: number, avatarDescription: string}>}
+     */
+    processURL(url) {
+
+        let gender, name, avatarContents, avatarDescription;
+
+        return new Promise((resolve, reject) => {
+
+            // Проверка ссылки
+            if (this.url) return reject(this.url == url ? AggroBot.VK.Error.SAME_PROFILE : AggroBot.VK.Error.ANOTHER_PROFILE);
+            if (url == AggroBot.vkCustomURL || url == AggroBot.vkIdURL) return reject(AggroBot.VK.Error.SAME_PROFILE);
+            if (url == "id0") return reject(AggroBot.VK.Error.ID_0);
+
+            resolve();
+
+        }).then(() => AggroBot.VK._requestProfile(url)).then(response => {
+
+            // Обработка несуществующего профиля
+            if (response["error"] && response["error"]["error_code"] == 113) return new Promise((resolve, reject) => {
+                VPP.ajax({
+                    url: "https://vk.com/" + url,
+                    success(response) {
+                        reject(response == "error" || $(response).is(":contains('Страница удалена либо ещё не создана')") ?
+                            AggroBot.VK.Error.PROFILE_DOES_NOT_EXIST : AggroBot.VK.Error.URL_INVALID);
+                    }
+                });
+            });
+
+            this.url = url;
+
+            // Обработка информации, полученной из ВКонтакте
+            const profile = response["response"][0];
+            if (profile["sex"]) gender = profile["sex"] == 2 ? AggroBot.UserProfile.Gender.MALE : AggroBot.UserProfile.Gender.FEMALE;
+            name = profile["first_name"];
+
+            // Обработка аватара: получение описания содержимого аватара
+            if (profile["photo_max_orig"] == "https://vk.com/images/camera_400.png") {
+                avatarContents = AggroBot.VK.AvatarContents.NONE;
+                return Promise.resolve();
+            }
+            return AggroBot.VK._searchByAvatar(profile["photo_max_orig"]);
+
+        }).then(description => {
+
+            console.log(`Translated Google's image guess: ${description}`);
+
+            if (/^(дженте?льмен|кожаный пиджак|девушка|шапочка|мотоциклетный шлем|дружба|сидящий|стоящий|толстовка с капюшоном|селфи|пользователь|свадебное платье|деловой человек|человек|мужчина|парень|личность|свитер|военная форма)$/.test(description)) {
+                avatarContents = AggroBot.VK.AvatarContents.PERSON;
+            } else {
+                avatarContents = AggroBot.VK.AvatarContents.OBJECT;
+                avatarDescription = description;
+            }
+
+            return Promise.resolve({name, gender, avatarContents, avatarDescription});
+
+        });
+
+    }
+
+};
+
+Object.assign(AggroBot.VK, {
+
+    /**
+     * Получает информацию с профиля ВКонтакте по ссылке
+     * @param {string} url
+     * @returns {Promise<object>}
+     * @private
+     */
+    _requestProfile(url) {
+        return new Promise((resolve, reject) => {
+            VPP.ajax({
+                url: "https://api.vk.com/method/users.get",
+                data: {
+                    "lang": "ru",
+                    "access_token": AggroBot.vkToken,
+                    "v": "5.69",
+                    "user_ids": url,
+                    "fields": "sex,photo_max_orig"
+                },
+                success(response) {
+                    try {
+                        resolve(JSON.parse(response));
+                    } catch(error) {
+                        reject(error);
+                    }
+                }
+            });
+        });
+    },
+
+    /**
+     * Получает описание содержимого аватара с профиля ВКонтакте по ссылке на изображение
+     * @param {string} url
+     * @returns {Promise<string>}
+     * @private
+     */
+    _searchByAvatar(url) {
+        return new Promise((resolve, reject) => {
+            VPP.ajax({
+                url: `https://www.google.com/searchbyimage?hl=ru&image_url=${url}`,
+                headers: {
+                    "Accept-Language": "ru;q=1"
+                },
+                success(response) {
+                    const description = $(response).find(":contains('Скорее всего, на картинке')").last().find("a").text();
+                    if (!description) return reject(new Error("No Google's description available"));
+                    VPP.ajax({
+                        url: `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ru&dt=t&q=${encodeURIComponent(description)}`,
+                        success: response => {
+                            try {
+                                resolve(JSON.parse(response)[0][0][0].toLowerCase());
+                            } catch (error) {
+                                reject(error);
+                            }
+                        }
+                    });
+                }
+            });
+        });
+    }
+
+});
+
+/**
+ * Ошибки при обработке полученного от собеседника профиля ВКонтакте
+ * @enum
+ * @readonly
+ */
+AggroBot.VK.Error = Object.freeze({
+    SAME_PROFILE: 0,
+    ANOTHER_PROFILE: 1,
+    BOT_PROFILE: 2,
+    ID_0: 3,
+    PROFILE_DOES_NOT_EXIST: 4,
+    URL_INVALID: 5
+});
+
+/**
+ * Варианты содержимого аватара профиля ВКонтакте
+ * @enum
+ * @readonly
+ */
+AggroBot.VK.AvatarContents = Object.freeze({
+    NONE: 0,
+    PERSON: 1,
+    OBJECT: 2
+});
+
+window.AggroBot = AggroBot;
 
 VPP.Chat.prototype.aggrobot = function(command, ...args) {
 
