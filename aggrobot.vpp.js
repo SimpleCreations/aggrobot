@@ -483,7 +483,7 @@ const AggroBot = class {
                 if (AggroBot.vkEnabled) {
                     let matches;
                     if (/(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|сыл(ку|ь)( на)?|линк(ани)?|записан|может)([ \-]? ка)?( тогда)?( ты| в| мне)?( тогда)?( свой)? (вк|vk|id|ай ?[дп]и|одноклас+ники|фб|fb|фейсбук|facebook|телег|в(ай|и)бер|в[оа](тс|ц)ап)|(вк[оа][а-я]+|vk|id|ай ?[дп]и|одноклас+ники|фб|fb|фейсбук|facebook|телег(у|рам+)|в(ай|и)бер|в[оа](тс|ц)ап+)( ты| мне)?( свой)? (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|с+ыл(ку|ь)|линк)/i.test(request.text) ||
-                        /(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|лучше)([\- ]?ка)? ([ст]во[ейю]|ты|сам|с+ыл(ку|ь))|([ст]во[ейю]|ты|сам|сыл(ку|ь)) (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|лучше|первы[йм])/i.test(request.text) && typeof this._userProfile.vk.requestedAt !== "undefined" && this.messagesReceived - this._userProfile.vk.requestedAt <= 6) {
+                        /(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|лучше)([\- ]?ка)? ([ст]во[ейю]|ты|сам|с+ыл(ку|ь))|([ст]во[ейю]|ты|сам|сыл(ку|ь)) (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|лучше|первы[йм])/i.test(request.text) && this._userProfile.vk.requestedAt !== undefined && this.messagesReceived - this._userProfile.vk.requestedAt <= 6) {
                         this._processAndAddToQueue(this._getMessage(!this._userProfile.vk.sent ? "vk_response" : "vk_already_sent"), defaultOptions);
                         added = true;
                     } else if (/(у )?меня (нет )?(в |на )?(вк|стра)|^нету? (вк|страницы)|^(а )?вк нет/i.test(request.text) || /(у меня (его )?|меня там )нет|не зарег|^нету$|не сижу/i.test(request.text) && this.messagesReceived - this._userProfile.vk.requestedAt <= 6) {
@@ -491,7 +491,13 @@ const AggroBot = class {
                         this._userProfile.vk.userDoesNotHave = true;
                     } else if (this.messagesReceived - this._userProfile.vk.requestedAt <= 10 && (matches = request.text.match(/(?:(?:https?:\/\/)?vk\.com)?(\/?id\d+|\/[a-z][\w.]{4,})/i))) {
                         const vk = matches[1].replace("/", "");
-                        this._userProfile.vk.processURL(vk).then(({name, gender, avatarContents, avatarDescription}) => {
+                        this._userProfile.vk.receive(vk).then(() => {
+
+                            this._processAndAddToQueue(this._getMessage("vk_acknowledged"), defaultOptions);
+                            added = true;
+                            return this._userProfile.vk.process();
+
+                        }).then(({name, gender, avatarContents, avatarDescription}) => {
 
                             if (gender !== undefined) {
                                 this._userProfile.gender = gender;
@@ -552,16 +558,12 @@ const AggroBot = class {
                             }
 
                         });
-                        if (!added) {
-                            this._processAndAddToQueue(this._getMessage("vk_acknowledged"), defaultOptions);
-                            added = true;
-                        }
                     }
                 }
 
 
                 // Ответы на реакцию на запрос подтверждения имени
-                if (typeof this._userProfile.nameConfirmationRequestedAt !== "undefined" && this.messagesReceived - this._userProfile.nameConfirmationRequestedAt <= 6) {
+                if (this._userProfile.nameConfirmationRequestedAt !== undefined && this.messagesReceived - this._userProfile.nameConfirmationRequestedAt <= 6) {
                     if (this._userProfile.name && /(как|откуда)( ты)?( меня)? (узнал|знаеш|угадал)|^как\??$|меня помниш/i.test(request.text)) {
                         this._processAndAddToQueue(this._getMessage("name_source"), defaultOptions);
                         this._userProfile.nameConfirmed = true;
@@ -622,7 +624,7 @@ const AggroBot = class {
         }
         if (!added && ready && this._userProfile.nameConfirmed && !this._userProfile.nameRhymed &&
                 Math.random() < AggroBot.PROBABILITY_NAME_RHYME) {
-            const rhyme = AggroBot.nameVariations.split(",").indexOf(this._userProfile.name) == -1 ?
+            const rhyme = !AggroBot.nameVariations.split(",").includes(this._userProfile.name) ?
                 this._getNameRhyme() : this._getMessage("name_same");
             if (rhyme) {
                 console.log("Got a rhyme to the name...");
@@ -1094,7 +1096,7 @@ const AggroBot = class {
                 let replacement = match;
                 if (Math.random() < this._style.insideInsertionProbability) {
                     const word = this._getMessage("insert_inside");
-                    if (p1 != word && lastWord != word && AggroBot.Style.PREPOSITIONS_OR_CONJUNCTIONS.indexOf(lastWord) == -1) {
+                    if (p1 != word && lastWord != word && !AggroBot.Style.PREPOSITIONS_OR_CONJUNCTIONS.includes(lastWord)) {
                         replacement = `${word} ${match}`;
                         changed = true;
                     }
@@ -1216,12 +1218,12 @@ const AggroBot = class {
      */
     processDeanonResult(gender, name, vk) {
 
-        if (typeof gender !== "undefined") {
+        if (gender !== undefined) {
             this.onReport(`Деанонимайзер: пол: ${gender === AggroBot.UserProfile.Gender.MALE ? "мужской" : "женский"}`);
             this._userProfile.gender = gender;
         }
 
-        if (typeof name !== "undefined") {
+        if (name !== undefined) {
             name = name.charAt(0).toUpperCase() + name.substring(1);
             this.onReport(`Деанонимайзер: имя: ${name}`);
             this._userProfile.name = name;
@@ -2249,7 +2251,7 @@ AggroBot.Style = class {
                     continue;
                 }
                 result += part.replace(letterRegExp, (letter, offset) => {
-                    if ("аоеи".indexOf(letter) == -1 || Math.random() > this.misspellProbability[0]) return letter;
+                    if (!"аоеи".includes(letter) || Math.random() > this.misspellProbability[0]) return letter;
                     // console.log(`misspelling "${part}" with type 0 @ ${offset}`);
                     switch (letter) {
                         case "а": return "о";
@@ -2763,6 +2765,13 @@ AggroBot.VK = class {
         this.url = undefined;
 
         /**
+         * Ещё не обработанная ссылка на ВКонтакте собседника
+         * @type {string}
+         * @private
+         */
+        this._tempURL = undefined;
+
+        /**
          * true, если у собеседника нет ВКонтакте
          * @type {boolean}
          */
@@ -2771,13 +2780,11 @@ AggroBot.VK = class {
     }
 
     /**
-     * Обрабатывает полученный от собеседника профиль ВКонтакте по ссылке
-     * @param url
-     * @returns {Promise<{name: string, gender: number, avatarContents: number, avatarDescription: string}>}
+     * Получает ссылку на профиль ВКонтакте
+     * @param {string} url
+     * @returns {Promise<>}
      */
-    processURL(url) {
-
-        let gender, name, avatarContents, avatarDescription;
+    receive(url) {
 
         return new Promise((resolve, reject) => {
 
@@ -2786,9 +2793,23 @@ AggroBot.VK = class {
             if (url == AggroBot.vkCustomURL || url == AggroBot.vkIdURL) return reject(AggroBot.VK.Error.SAME_PROFILE);
             if (url == "id0") return reject(AggroBot.VK.Error.ID_0);
 
+            this._tempURL = url;
             resolve();
 
-        }).then(() => AggroBot.VK._requestProfile(url)).then(response => {
+        });
+
+    }
+
+    /**
+     * Обрабатывает полученный от собеседника профиль ВКонтакте по ссылке
+     * @returns {Promise<{name: string, gender: number, avatarContents: number, avatarDescription: string}>}
+     */
+    process() {
+
+        const url = this._tempURL;
+        let gender, name, avatarContents, avatarDescription;
+
+        return AggroBot.VK._requestProfile(url).then(response => {
 
             // Обработка несуществующего профиля
             if (response["error"] && response["error"]["error_code"] == 113) return new Promise((resolve, reject) => {
@@ -2801,6 +2822,7 @@ AggroBot.VK = class {
                 });
             });
 
+            this._tempURL = undefined;
             this.url = url;
 
             // Обработка информации, полученной из ВКонтакте
@@ -2809,7 +2831,7 @@ AggroBot.VK = class {
             name = profile["first_name"];
 
             // Обработка аватара: получение описания содержимого аватара
-            if (profile["photo_max_orig"] == "https://vk.com/images/camera_400.png") {
+            if (profile["photo_max_orig"].indexOf("https://vk.com/images/camera_400.png") == 0) {
                 avatarContents = AggroBot.VK.AvatarContents.NONE;
                 return Promise.resolve();
             }
