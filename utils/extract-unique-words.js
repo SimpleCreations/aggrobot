@@ -4,7 +4,9 @@ module.exports = () => {
 
     const database = JSON.parse(fs.readFileSync("../database.json"));
 
-    const vowelRegExp = /[аеёиоуыэюя](?=[а-яё])/g;
+    const vowelRegExp = /[аеёиоуыэюя]/g;
+    const nonLastVowelRegExp = /[аеёиоуыэюя](?=[а-яё])/g;
+    const sibilantRegExp = /[жчшщ]([ео])/;
     const misspellLettersRegExp = /[аеио](?=[а-яё])/;
     const result = new Set();
     const processResponse = response => {
@@ -14,10 +16,17 @@ module.exports = () => {
 
         response.toLowerCase().split(/[^а-яё]+/).filter(String).forEach(word => {
 
-            if (word.includes("ё") || word.search(misspellLettersRegExp) == -1) return;
+            if (word.includes("ё")) return;
 
-            const letters = word.match(vowelRegExp);
-            if (!letters || letters.length < 2 || letters.length == 1 && "еюя".includes(word.charAt(0))) return;
+            const sibilantMatches = word.match(sibilantRegExp);
+            if (!sibilantMatches || !(sibilantMatches[1] == "е" || word.match(vowelRegExp).length > 1)) {
+
+                if (word.search(misspellLettersRegExp) == -1) return;
+
+                const letters = word.match(nonLastVowelRegExp);
+                if (!letters || letters.length < 2 || letters.length == 1 && "еюя".includes(word.charAt(0))) return;
+
+            }
 
             result.add(word);
 

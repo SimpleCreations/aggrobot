@@ -2095,7 +2095,7 @@ AggroBot.Style = class {
 
             // Ошибка типа 0: замена а <-> о, и <-> е
             // От 0 до 0.4
-            0: Math.pow(2, 9 * Math.random() - 11.4),
+            0: Math.pow(2, 9.4 * Math.random() - 11.4),
 
             // Ошибка типа 9: шо <-> ше, чо <-> чё, що <-> ще
             1: Math.random() * 0.8,
@@ -2288,8 +2288,8 @@ AggroBot.Style = class {
         const getStress = position => {
             while (position && /[а-яё]/.test(original.charAt(position - 1))) position--;
             const word = original.substring(position);
-            const stress = stress[word.substring(0, word.search(/[^а-яё]|$/))];
-            return {stress, position, word};
+            const stressOffset = stress[word.substring(0, word.search(/[^а-яё]|$/))];
+            return {stressOffset, position, word};
         };
         [
             /([жчшщ])([еёо])(?=[а-чщ-яё])/g,
@@ -2312,20 +2312,21 @@ AggroBot.Style = class {
                 const offset = matches[matches.length - 2];
                 switch (type) {
                     case 1: {
-                        const {stress, position} = getStress(offset);
+                        const {stressOffset, position, word} = getStress(offset);
                         // Заменяем только ё или о под ударением
                         if (matches[2] != "ё" &&
-                                !(matches[2] == "е" ? stress == position - (offset + 1) - 1 : stress == offset + 1 - position)) {
+                            !(matches[2] == "е" ? stressOffset == position - (offset + 1) - 1 :
+                                stressOffset == offset + 1 - position || word.match(/[аеёиоуыэюя]/g).length == 1)) {
                             console.log(`Skipping non-stressed letter: ${matches[2]} in ${matches[0]}`);
                             return matches[0];
                         }
                         return matches[1] + ("её".includes(matches[2]) ? "о" : "е");
                     } case 2: {
-                        const {stress, word} = getStress(offset);
+                        const {stressOffset, word} = getStress(offset);
                         // Слово-исключение
                         if (word == "много") return matches[0];
                         // Ели последняя о ударная, то не заменяем её на а
-                        return matches[1] + "в" + (stress == matches[1].length + 1 ? "о" : "а");
+                        return matches[1] + "в" + (stressOffset == matches[1].length + 1 ? "о" : "а");
                     } case 3:
                         return "т" + (matches[1] ? "" : "ь") + "ся";
                     case 4:
