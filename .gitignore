@@ -1,1 +1,6 @@
 .idea
+utils/stresses.json
+utils/stresses.old.json
+utils/unique-words.json
+utils/unique-words.old.json
+utils/unique-words.complete.json

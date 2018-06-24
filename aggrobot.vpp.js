@@ -1112,7 +1112,7 @@ const AggroBot = class {
         });
 
         // Добавляем ошибки
-        splitResult.forEach(queued => queued.message = this._style.misspell(queued.message));
+        splitResult.forEach(queued => queued.message = this._style.misspell(queued.message, this._database.stress));
 
         // Умножаем количество вопросительных и восклицательных знаков
         for (let i = splitResult.length - 1; i >= 0; i--) {
@@ -1635,19 +1635,28 @@ AggroBot.Database = class {
     constructor() {
 
         /**
+         * Ответы по регулярным выражениям
          * @type {Array<AggroBot.Matcher>}
          */
         this.answers = [];
 
         /**
+         * Условные ответы
          * @type {Map<string, AggroBot.ResponseSet>}
          */
         this.conditional = new Map();
 
         /**
+         * Рифмы к именам
          * @type {Array<AggroBot.Matcher>}
          */
         this.nameRhymes = [];
+
+        /**
+         * Словарь ударений
+         * @type {object}
+         */
+        this.stress = undefined;
 
     }
 
@@ -1740,9 +1749,9 @@ Object.assign(AggroBot.Database, {
             database[key] = set;
         });
 
-        if (typeof raw.answers === "object") Object.keys(raw.answers).forEach(regExpStr => {
+        if (typeof raw["answers"] === "object") Object.keys(raw["answers"]).forEach(regExpStr => {
             const set = new AggroBot.ResponseSet();
-            raw.answers[regExpStr].forEach(string => {
+            raw["answers"][regExpStr].forEach(string => {
                 const response = new AggroBot.Response(new String(string));
                 response.unique = true;
                 set.add(response);
@@ -1758,9 +1767,9 @@ Object.assign(AggroBot.Database, {
             database.answers.push(new AggroBot.Matcher(regExp, set));
         });
 
-        if (typeof raw.conditional === "object") Object.keys(raw.conditional).forEach(key => {
+        if (typeof raw["conditional"] === "object") Object.keys(raw["conditional"]).forEach(key => {
             const set = new AggroBot.ResponseSet();
-            raw.conditional[key].forEach(string => {
+            raw["conditional"][key].forEach(string => {
                 const response = new AggroBot.Response(new String(string));
                 response.unique = true;
                 set.add(response);
@@ -1768,11 +1777,13 @@ Object.assign(AggroBot.Database, {
             database.conditional.set(key, set);
         });
 
-        if (typeof raw.name_rhymes === "object") Object.keys(raw.name_rhymes).forEach(names => {
+        if (typeof raw["name_rhymes"] === "object") Object.keys(raw["name_rhymes"]).forEach(names => {
             const set = new AggroBot.ResponseSet();
-            raw.name_rhymes[names].forEach(string => set.add(new AggroBot.Response(new String(string))));
+            raw["name_rhymes"][names].forEach(string => set.add(new AggroBot.Response(new String(string))));
             database.nameRhymes.push(new AggroBot.Matcher(new RegExp("^(?:" + names.replace(/,/g, "|") + ")$"), set));
         });
+
+        if (typeof raw["stress"] === "object") database.stress = raw["stress"];
 
         return database;
 
@@ -1799,6 +1810,8 @@ Object.assign(AggroBot.Database, {
 
         anotherDatabase.nameRhymes.forEach(matcher =>
             database.nameRhymes.push(new AggroBot.Matcher(matcher.regExp, matcher.responses.clone())));
+
+        database.stress = anotherDatabase.stress;
 
         return database;
 
@@ -2084,32 +2097,32 @@ AggroBot.Style = class {
             // От 0 до 0.4
             0: Math.pow(2, 9 * Math.random() - 11.4),
 
-            // Ошибка типа 1: -тся/-ться
-            1: AggroBot.Style._getTwoOptionProbability(0.15, 0.5),
-
-            // Ошибка типа 2: -ишь, -ешь
-            2: AggroBot.Style._getTwoOptionProbability(0.75, 0.375),
-
-            // Ошибка типа 3: мягкий знак после шипящих
-            3: AggroBot.Style._getTwoOptionProbability(0.07, 0.6),
-
-            // Ошибка типа 4: жи, ши, ча, ща, чу, щу
-            4: AggroBot.Style._getTwoOptionProbability(0.07143, 0.7),
-
-            // Ошибка типа 5: -чк-, -чн-
-            5: AggroBot.Style._getTwoOptionProbability(0.2, 0.55),
-
-            // Ошибка типа 6: не- слитно/раздельно
-            6: AggroBot.Style._getTwoOptionProbability(0.1, 0.5),
-
-            // Ошибка типа 7: нн <-> н
-            7: AggroBot.Style._getTwoOptionProbability(0.1, 0.5),
+            // Ошибка типа 9: шо <-> ше, чо <-> чё, що <-> ще
+            1: Math.random() * 0.8,
 
             // Ошибка типа 8: ого -> ова
-            8: AggroBot.Style._getTwoOptionProbability(0.06, 0.8),
+            2: AggroBot.Style._getTwoOptionProbability(0.06, 0.8),
 
-            // Ошибка типа 9: шо <-> ше, чо <-> чё, що <-> ще
-            9: Math.random() * 0.8,
+            // Ошибка типа 1: -тся/-ться
+            3: AggroBot.Style._getTwoOptionProbability(0.15, 0.5),
+
+            // Ошибка типа 2: -ишь, -ешь
+            4: AggroBot.Style._getTwoOptionProbability(0.75, 0.375),
+
+            // Ошибка типа 3: мягкий знак после шипящих
+            5: AggroBot.Style._getTwoOptionProbability(0.07, 0.6),
+
+            // Ошибка типа 4: жи, ши, ча, ща, чу, щу
+            6: AggroBot.Style._getTwoOptionProbability(0.07143, 0.7),
+
+            // Ошибка типа 5: -чк-, -чн-
+            7: AggroBot.Style._getTwoOptionProbability(0.2, 0.55),
+
+            // Ошибка типа 6: не- слитно/раздельно
+            8: AggroBot.Style._getTwoOptionProbability(0.1, 0.5),
+
+            // Ошибка типа 7: нн <-> н
+            9: AggroBot.Style._getTwoOptionProbability(0.1, 0.5),
 
             // Стиль типа 10: меня -> мя, тебя -> тя
             10: AggroBot.Style._getTwoOptionProbability(0.05, 0.5),
@@ -2231,9 +2244,12 @@ AggroBot.Style = class {
     /**
      * Вставляет во фразу ошибки на основе стиля
      * @param {string} string
+     * @param {object} stress Словарь ударений
      * @returns {string}
      */
-    misspell(string) {
+    misspell(string, stress = {}) {
+
+        const original = string.toLowerCase();
 
         // Тип 0
         {
@@ -2244,15 +2260,19 @@ AggroBot.Style = class {
             let result = match ? match[0] : "";
             let matches;
             while (matches = wordRegExp.exec(string)) {
-                const part = matches[0];
+                const [part, word] = matches;
                 const letters = part.match(letterRegExp);
                 if (!letters || letters.length < 2) { // Пропускаем короткие слова
                     result += part;
                     continue;
                 }
                 result += part.replace(letterRegExp, (letter, offset) => {
-                    if (!"аоеи".includes(letter) || Math.random() > this.misspellProbability[0]) return letter;
-                    // console.log(`misspelling "${part}" with type 0 @ ${offset}`);
+                    if (!"аоеи".includes(letter) || offset == 0 && "еи".includes(letter) ||
+                        Math.random() > this.misspellProbability[0]) return letter;
+                    if (Math.abs(stress[word] + 0.5) - 0.5 == offset) {
+                        console.log(`NOT misspelling '${part}' @ ${offset} because the letter is stressed`);
+                        return letter;
+                    }
                     switch (letter) {
                         case "а": return "о";
                         case "о": return "а";
@@ -2265,7 +2285,15 @@ AggroBot.Style = class {
         }
 
         // Тип 1–11
+        const getStress = position => {
+            while (position && /[а-яё]/.test(original.charAt(position - 1))) position--;
+            const word = original.substring(position);
+            const stress = stress[word.substring(0, word.search(/[^а-яё]|$/))];
+            return {stress, position, word};
+        };
         [
+            /([жчшщ])([еёо])(?=[а-чщ-яё])/g,
+            /([а-яё]{3,}[аоеи])го(?![а-яё])/g,
             /т(ь?)ся(?![а-яё])/g,
             /([еёи])шь(?![а-яё])/g,
             /([аоуыэюя][жчшщ])(ь?)(?![а-яё])/g,
@@ -2273,8 +2301,6 @@ AggroBot.Style = class {
             /ч([кн])/g,
             /([^а-яё]|^)н([еи])( ?)(?=[а-яё]{3,})/g,
             /([а-яё]+[аеёиоуыюя])(н+)(?=(?:[ыиао]й|[аоя]я|[аоеи](?:е|го|му)|ик|ица)(?:[^а-яё]|$))/g,
-            /([а-яё]{3,}[аоеи])го(?![а-яё])/g,
-            /([жчшщ])([еёо])(?=[а-чщ-яё])/g,
             /([^а-яё]|^)([мт])(ен|еб)я(?![а-яё])/g,
             /в([ао]{1,2})бще/g,
             /([бвгджзклмпрстфхцчшщ])\1/g,
@@ -2283,27 +2309,38 @@ AggroBot.Style = class {
             const type = index + 1;
             string = string.replace(regExp, (...matches) => {
                 if (Math.random() > this.misspellProbability[type]) return matches[0];
-                // console.log(`misspelling "${string}" with type ${type} @ ${matches[matches.length - 2]}`);
+                const offset = matches[matches.length - 2];
                 switch (type) {
-                    case 1:
+                    case 1: {
+                        const {stress, position} = getStress(offset);
+                        // Заменяем только ё или о под ударением
+                        if (matches[2] != "ё" &&
+                                !(matches[2] == "е" ? stress == position - (offset + 1) - 1 : stress == offset + 1 - position)) {
+                            console.log(`Skipping non-stressed letter: ${matches[2]} in ${matches[0]}`);
+                            return matches[0];
+                        }
+                        return matches[1] + ("её".includes(matches[2]) ? "о" : "е");
+                    } case 2: {
+                        const {stress, word} = getStress(offset);
+                        // Слово-исключение
+                        if (word == "много") return matches[0];
+                        // Ели последняя о ударная, то не заменяем её на а
+                        return matches[1] + "в" + (stress == matches[1].length + 1 ? "о" : "а");
+                    } case 3:
                         return "т" + (matches[1] ? "" : "ь") + "ся";
-                    case 2:
-                        return matches[1] + "ш";
-                    case 3:
-                        return matches[1];
                     case 4:
+                        return matches[1] + "ш";
+                    case 5:
+                        return matches[1];
+                    case 6:
                         const letter = matches[0].charAt(1);
                         return matches[0].charAt(0) + (letter == "и" ? "ы" : letter == "а" ? "я" : "ю");
-                    case 5:
-                        return "чь" + matches[1];
-                    case 6:
-                        return matches[1] + "н" + matches[2] + (matches[3] ? "" : " ");
                     case 7:
-                        return matches[1] + (matches[2].length == 1 ? "нн" : "н");
+                        return "чь" + matches[1];
                     case 8:
-                        return matches[1] + "ва";
+                        return matches[1] + "н" + matches[2] + (matches[3] ? "" : " ");
                     case 9:
-                        return matches[1] + (matches[2] == "е" || matches[2] == "ё" ? "о" : "е");
+                        return matches[1] + (matches[2].length == 1 ? "нн" : "н");
                     case 10:
                         return matches[1] + matches[2] + "я";
                     case 11:
