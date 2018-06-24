@@ -550,6 +550,7 @@ const AggroBot = class {
                                 case AggroBot.VK.Error.ID_0: databaseKey = "vk_id0"; break;
                                 case AggroBot.VK.Error.PROFILE_DOES_NOT_EXIST: databaseKey = "vk_does_not_exist"; break;
                                 case AggroBot.VK.Error.URL_INVALID: databaseKey = "vk_invalid"; break;
+                                case AggroBot.VK.Error.BANNED: databaseKey = "vk_banned"; break;
                                 default: console.log(error);
                             }
                             if (databaseKey) {
@@ -2098,7 +2099,7 @@ AggroBot.Style = class {
             0: Math.pow(2, 9.4 * Math.random() - 11.4),
 
             // Ошибка типа 9: шо <-> ше, чо <-> чё, що <-> ще
-            1: Math.random() * 0.8,
+            1: AggroBot.Style._getTwoOptionProbability(0.25, 0.5),
 
             // Ошибка типа 8: ого -> ова
             2: AggroBot.Style._getTwoOptionProbability(0.06, 0.8),
@@ -2287,15 +2288,16 @@ AggroBot.Style = class {
         // Тип 1–11
         const getStress = position => {
             while (position && /[а-яё]/.test(original.charAt(position - 1))) position--;
-            const word = original.substring(position);
-            const stressOffset = stress[word.substring(0, word.search(/[^а-яё]|$/))];
+            let word = original.substring(position);
+            word = word.substring(0, word.search(/[^а-яё]|$/));
+            const stressOffset = stress[word];
             return {stressOffset, position, word};
         };
         [
             /([жчшщ])([еёо])(?=[а-чщ-яё])/g,
             /([а-яё]{3,}[аоеи])го(?![а-яё])/g,
             /т(ь?)ся(?![а-яё])/g,
-            /([еёи])шь(?![а-яё])/g,
+            /([еёи])шь(ся)?(?![а-яё])/g,
             /([аоуыэюя][жчшщ])(ь?)(?![а-яё])/g,
             /[жш]и|[чщ][ау]/g,
             /ч([кн])/g,
@@ -2317,20 +2319,20 @@ AggroBot.Style = class {
                         if (matches[2] != "ё" &&
                             !(matches[2] == "е" ? stressOffset == position - (offset + 1) - 1 :
                                 stressOffset == offset + 1 - position || word.match(/[аеёиоуыэюя]/g).length == 1)) {
-                            console.log(`Skipping non-stressed letter: ${matches[2]} in ${matches[0]}`);
+                            console.log(`Skipping non-stressed letter: ${matches[2]} in ${matches[0]} ('${word}')`);
                             return matches[0];
                         }
                         return matches[1] + ("её".includes(matches[2]) ? "о" : "е");
                     } case 2: {
                         const {stressOffset, word} = getStress(offset);
-                        // Слово-исключение
-                        if (word == "много") return matches[0];
+                        // Слова-исключения
+                        if (/^(н[ае]|пр[еи])?много$/.test(word)) return matches[0];
                         // Ели последняя о ударная, то не заменяем её на а
                         return matches[1] + "в" + (stressOffset == matches[1].length + 1 ? "о" : "а");
                     } case 3:
                         return "т" + (matches[1] ? "" : "ь") + "ся";
                     case 4:
-                        return matches[1] + "ш";
+                        return matches[1] + "ш" + (matches[2] || "");
                     case 5:
                         return matches[1];
                     case 6:
@@ -2860,11 +2862,13 @@ AggroBot.VK = class {
                 });
             });
 
+            const profile = response["response"][0];
+            if (profile["deactivated"]) return Promise.reject(AggroBot.VK.Error.BANNED);
+
             this._tempURL = undefined;
             this.url = url;
 
             // Обработка информации, полученной из ВКонтакте
-            const profile = response["response"][0];
             if (profile["sex"]) gender = profile["sex"] == 2 ? AggroBot.UserProfile.Gender.MALE : AggroBot.UserProfile.Gender.FEMALE;
             name = profile["first_name"];
 
@@ -2968,7 +2972,8 @@ AggroBot.VK.Error = Object.freeze({
     BOT_PROFILE: 2,
     ID_0: 3,
     PROFILE_DOES_NOT_EXIST: 4,
-    URL_INVALID: 5
+    URL_INVALID: 5,
+    BANNED: 6
 });
 
 /**
