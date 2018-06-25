@@ -2210,8 +2210,7 @@ AggroBot.Style = class {
                     else if ((random -= this.swapTypoProbability) < this.mishitTypoProbability) {
                         const options = AggroBot.Style._KEYBOARD_TYPOS[part[i]];
                         newPart += options ? options[Math.floor(Math.random() * options.length)] : part[i];
-                    }
-                    else if ((random -= this.mishitTypoProbability) < this.alterTypoProbability) {
+                    } else if ((random -= this.mishitTypoProbability) < this.alterTypoProbability) {
                         if (Math.random() < 0.5) {
                             const options = AggroBot.Style._KEYBOARD_TYPOS[part[i]];
                             newPart += part[i] + (options ? options[Math.floor(Math.random() * options.length)] : "");
@@ -2521,8 +2520,7 @@ AggroBot.SpamDetector = class {
                         variables["character"] = first;
                         variables["charactername"] = variation => characterName[variation] || characterName["singular"];
                         return;
-                    }
-                    else if (/[а-яёa-z]/.test(first)) {
+                    } else if (/[а-яёa-z]/.test(first)) {
                         result = "spam_same_letter";
                         variables["letter"] = first;
                         return;
@@ -2606,8 +2604,7 @@ AggroBot.SpamDetector = class {
                 case AggroBot.SpamDetector.State.IGNORING:
                     result = null;
                     break;
-            }
-            else {
+            } else {
                 this._repeatedText = null;
                 this.state = AggroBot.SpamDetector.State.ANALYZING;
             }
@@ -2873,22 +2870,21 @@ AggroBot.VK = class {
             name = profile["first_name"];
 
             // Обработка аватара: получение описания содержимого аватара
-            if (profile["photo_max_orig"].indexOf("https://vk.com/images/camera_400.png") == 0) {
-                avatarContents = AggroBot.VK.AvatarContents.NONE;
-                return Promise.resolve();
-            }
+            if (profile["photo_max_orig"].indexOf("https://vk.com/images/camera_400.png") == 0) return Promise.resolve();
             return AggroBot.VK._searchByAvatar(profile["photo_max_orig"]);
 
         }).then(description => {
 
-            console.log(`Translated Google's image guess: ${description}`);
-
-            if (/^(дженте?льмен|кожаный пиджак|девушка|шапочка|мотоциклетный шлем|дружба|сидящий|стоящий|толстовка с капюшоном|селфи|пользователь|свадебное платье|деловой человек|человек|мужчина|парень|личность|свитер|военная форма)$/.test(description)) {
-                avatarContents = AggroBot.VK.AvatarContents.PERSON;
-            } else {
-                avatarContents = AggroBot.VK.AvatarContents.OBJECT;
-                avatarDescription = description;
+            if (description) {
+                console.log(`Translated Google's image guess: ${description}`);
+                if (/^(дженте?льмен|кожаный пиджак|девушка|шапочка|мотоциклетный шлем|дружба|сидящий|стоящий|толстовка с капюшоном|селфи|пользователь|свадебное платье|деловой человек|человек|мужчина|парень|личность|свитер|военная форма)$/.test(description)) {
+                    avatarContents = AggroBot.VK.AvatarContents.PERSON;
+                } else {
+                    avatarContents = AggroBot.VK.AvatarContents.OBJECT;
+                    avatarDescription = description;
+                }
             }
+            else avatarContents = AggroBot.VK.AvatarContents.NONE;
 
             return Promise.resolve({name, gender, avatarContents, avatarDescription});
 
