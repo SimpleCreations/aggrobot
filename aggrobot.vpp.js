@@ -1095,7 +1095,7 @@ const AggroBot = class {
             let lastWord = "";
             queued.message = queued.message.replace(wordRegExp, (match, p1) => {
                 let replacement = match;
-                if (Math.random() < this._style.insideInsertionProbability) {
+                if (!AggroBot.vkIdURL.includes(p1) && Math.random() < this._style.insideInsertionProbability) {
                     const word = this._getMessage("insert_inside");
                     if (p1 != word && lastWord != word && !AggroBot.Style.PREPOSITIONS_OR_CONJUNCTIONS.includes(lastWord)) {
                         replacement = `${word} ${match}`;
