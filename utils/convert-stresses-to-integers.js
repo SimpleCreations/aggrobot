@@ -3,9 +3,10 @@ const wordsNeeded = require("./extract-unique-words")();
 
 const existingStresses = JSON.parse(fs.readFileSync("../database.json"))["stress"] || {};
 const newStresses = JSON.parse(fs.readFileSync("unique-words.json"));
+const WORDS_TO_KEEP = ["антон", "васютин", "понедельник", "вторник", "четверг", "пятница", "суббота", "воскресенье"];
 
 Object.keys(existingStresses).forEach(word => {
-    if (!wordsNeeded.has(word)) delete existingStresses[word];
+    if (!wordsNeeded.has(word) && !WORDS_TO_KEEP.includes(word)) delete existingStresses[word];
 });
 
 Object.keys(newStresses).forEach(word => {
