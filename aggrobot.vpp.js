@@ -483,13 +483,13 @@ const AggroBot = class {
                 if (AggroBot.vkEnabled) {
                     let matches;
                     if (/(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|сыл(ку|ь)( на)?|линк(ани)?|записан|может)([ \-]? ка)?( тогда)?( ты| в| мне)?( тогда)?( свой)? (вк|vk|id|ай ?[дп]и|одноклас+ники|фб|fb|фейсбук|facebook|телег|в(ай|и)бер|в[оа](тс|ц)ап)|(вк[оа][а-я]+|vk|id|ай ?[дп]и|одноклас+ники|фб|fb|фейсбук|facebook|телег(у|рам+)|в(ай|и)бер|в[оа](тс|ц)ап+)( ты| мне)?( свой)? (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|с+ыл(ку|ь)|линк)/i.test(request.text) ||
-                        /(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|лучше)([\- ]?ка)? ([ст]во[ейю]|ты|сам|с+ыл(ку|ь))|([ст]во[ейю]|ты|сам|сыл(ку|ь)) (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|лучше|первы[йм])/i.test(request.text) && this._userProfile.vk.requestedAt !== undefined && this.messagesReceived - this._userProfile.vk.requestedAt <= 6) {
+                        /(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|лучше)([\- ]?ка)? ([ст]во[еёйю]|ты|сам|с+ыл(ку|ь))|([ст]во[еёйю]|ты|сам|сыл(ку|ь)) (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|лучше|первы[йм])/i.test(request.text) && this._userProfile.vk.requestedAt !== undefined && this.messagesReceived - this._userProfile.vk.requestedAt <= 6) {
                         this._processAndAddToQueue(this._getMessage(!this._userProfile.vk.sent ? "vk_response" : "vk_already_sent"), defaultOptions);
                         added = true;
                     } else if (/(у )?меня (нет )?(в |на )?(вк|стра)|^нету? (вк|страницы)|^(а )?вк нет/i.test(request.text) || /(у меня (его )?|меня там )нет|не зарег|^нету$|не сижу/i.test(request.text) && this.messagesReceived - this._userProfile.vk.requestedAt <= 6) {
                         console.log("User does not have VK profile");
                         this._userProfile.vk.userDoesNotHave = true;
-                    } else if (this.messagesReceived - this._userProfile.vk.requestedAt <= 10 && (matches = request.text.match(/(?:(?:https?:\/\/)?vk\.com)?(\/?id\d+|\/[a-z][\w.]{4,})/i))) {
+                    } else if (this.messagesReceived - this._userProfile.vk.requestedAt <= 10 && (matches = request.text.match(/(?:(?:https?:\/\/)?(?:m\.)?vk\.com)?(\/?id\d+|\/[a-z][\w.]{4,})/i))) {
                         const vk = matches[1].replace("/", "");
                         this._userProfile.vk.receive(vk).then(() => {
 
