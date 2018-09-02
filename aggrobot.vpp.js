@@ -564,14 +564,14 @@ const AggroBot = class {
 
 
                 // Ответы на реакцию на запрос подтверждения имени
-                if (this._userProfile.nameConfirmationRequestedAt !== undefined && this.messagesReceived - this._userProfile.nameConfirmationRequestedAt <= 6) {
-                    if (this._userProfile.name && /(как|откуда)( ты)?( меня)? (узнал|знаеш|угадал)|^как\??$|меня помниш/i.test(request.text)) {
+                if (this._userProfile.nameConfirmationRequestedAt !== undefined && this.messagesReceived - this._userProfile.nameConfirmationRequestedAt <= 8) {
+                    if (this._userProfile.name && /(как|откуда)( ты)?( меня| это)? (узнал|знаеш|угадал)|^как\??$|меня помниш/i.test(request.text)) {
                         this._processAndAddToQueue(this._getMessage("name_source"), defaultOptions);
                         this._userProfile.nameConfirmed = true;
                         added = true;
                         console.log("Name confirmed");
                         break;
-                    } else if (/^(а+|э+м+|ну)?[^а-я]*да+([^а-яё]|$)|[^н]. угадал|^(угадал|почти|ага)|(^конечно|именно|верно|почти|допустим|прикинь|возможно|^это? я|^а ч(то|[её])|^(ну )?и( что| ч[её])?)[^а-я]*([^а-я ]|$)|^(\+|ну)$/i.test(request.text)) {
+                    } else if (/^(а+|э+м+|ну)?[^а-я]*да+([^а-яё]|$)|[^н]. угадал|^(угадал|почти|ага)|(^конечно|именно|верно|почти|допустим|прикинь|предположим|возможно|^это? я|^а ч(то|[её])|^(ну )?и( что| ч[её])?)[^а-я]*([^а-я ]|$)|^(\+|ну)$/i.test(request.text)) {
                         this._userProfile.nameConfirmed = true;
                         console.log("Name confirmed");
                         break;
