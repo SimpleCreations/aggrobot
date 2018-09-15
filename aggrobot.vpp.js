@@ -565,7 +565,7 @@ const AggroBot = class {
 
                 // Ответы на реакцию на запрос подтверждения имени
                 if (this._userProfile.nameConfirmationRequestedAt !== undefined && this.messagesReceived - this._userProfile.nameConfirmationRequestedAt <= 8) {
-                    if (this._userProfile.name && /(как|откуда)( ты)?( меня| это)? (узнал|знаеш|угадал)|^как\??$|меня помниш/i.test(request.text)) {
+                    if (/(как|откуда)( ты)?( меня| это)? (узнал|знаеш|угадал)|^как\??$|меня помниш/i.test(request.text)) {
                         this._processAndAddToQueue(this._getMessage("name_source"), defaultOptions);
                         this._userProfile.nameConfirmed = true;
                         added = true;
@@ -578,6 +578,7 @@ const AggroBot = class {
                     } else if (/^не([та\-]| верно| угадал|$)|^(мен)?я не |^мимо[^а-я]*$|^-$/i.test(request.text) && !this._userProfile.nameConfirmed) {
                         this._processAndAddToQueue(this._getMessage("name_incorrect"), defaultOptions);
                         this._userProfile.name = undefined;
+                        this._userProfile.nameConfirmationRequestedAt = undefined;
                         this._userProfile.nameConfirmed = false;
                         this._userProfile.nameAskedAt = this.messagesReceived;
                         added = true;
