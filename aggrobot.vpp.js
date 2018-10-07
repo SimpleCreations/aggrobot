@@ -575,7 +575,7 @@ const AggroBot = class {
                         this._userProfile.nameConfirmed = true;
                         console.log("Name confirmed");
                         break;
-                    } else if (/^не([та\-]| верно| угадал|$)|^(мен)?я не |^мимо[^а-я]*$|^-$/i.test(request.text) && !this._userProfile.nameConfirmed) {
+                    } else if (/^не+([та\-]| верно| угадал|$)|^(мен)?я не |^мимо[^а-я]*$|^-$/i.test(request.text) && !this._userProfile.nameConfirmed) {
                         this._processAndAddToQueue(this._getMessage("name_incorrect"), defaultOptions);
                         this._userProfile.name = undefined;
                         this._userProfile.nameConfirmationRequestedAt = undefined;
@@ -2545,7 +2545,7 @@ AggroBot.SpamDetector = class {
                 if (slice.every(str => /^[а-яёa-z]$/i.test(str))) {
                     result = "spam_single_letter_or_digit";
                     variables["letterordigit"] = letter => letter;
-                    variables["gletterordigit"] = function(letterMale, letterFemale) {
+                    variables["gletterordigit"] = function(letterMale, digitMale, letterFemale) {
                         return this._userProfile.gender === AggroBot.UserProfile.Gender.MALE ? letterMale : letterFemale;
                     };
                     return;
