@@ -1367,6 +1367,21 @@ Object.assign(AggroBot, {
 
         "time_school_tomorrow": () => {
             return AggroBot.satisfiesCondition["time_school_day"](1);
+        },
+
+        "time_new_year": () => {
+            const now = new Date(), month = now.getMonth(), day = now.getDate();
+            return month == 11 && day >= 15 || month == 0 && day <= 10;
+        },
+        
+        "time_before_new_year": () => {
+            const now = new Date();
+            return now.getMonth() == 11 && now.getDate() >= 10;
+        },
+
+        "time_after_new_year": () => {
+            const now = new Date();
+            return now.getMonth() == 0 && now.getDate() <= 10;
         }
 
     },
