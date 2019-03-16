@@ -175,20 +175,6 @@ const enableScript = () => {
             aggroBot.receiveMessage(request);
             aggroBot.prepareResponse(request, chat.messageSent);
 
-            // Частотный анализ сообщений
-            if (request.text && VPPScript.storage.wordFreqs) request.text.toLowerCase().split(/[^а-яё]+/).filter(String).forEach(word => {
-
-                if (word in VPPScript.storage.wordFreqs) VPPScript.storage.wordFreqs[word]++;
-                else VPPScript.storage.wordFreqs[word] = 1;
-
-                for (let i = 0; i < word.length - 2; i++) {
-                    const part = word.substr(i, 3);
-                    if (part in VPPScript.storage.partFreqs) VPPScript.storage.partFreqs[part]++;
-                    else VPPScript.storage.partFreqs[part] = 1;
-                }
-
-            });
-
         });
 
         chat.addEventListener(VPP.Chat.Event.MESSAGE_DELIVERED, "aggrobot", () => chat.messageSent = true);
