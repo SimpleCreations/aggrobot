@@ -175,6 +175,20 @@ const enableScript = () => {
             aggroBot.receiveMessage(request);
             aggroBot.prepareResponse(request, chat.messageSent);
 
+            // Частотный анализ сообщений
+            if (request.text && VPPScript.storage.wordFreqs) request.text.toLowerCase().split(/[^а-яё]+/).filter(String).forEach(word => {
+
+                if (word in VPPScript.storage.wordFreqs) VPPScript.storage.wordFreqs[word]++;
+                else VPPScript.storage.wordFreqs[word] = 1;
+
+                for (let i = 0; i < word.length - 2; i++) {
+                    const part = word.substr(i, 3);
+                    if (part in VPPScript.storage.partFreqs) VPPScript.storage.partFreqs[part]++;
+                    else VPPScript.storage.partFreqs[part] = 1;
+                }
+
+            });
+
         });
 
         chat.addEventListener(VPP.Chat.Event.MESSAGE_DELIVERED, "aggrobot", () => chat.messageSent = true);
@@ -1376,7 +1390,7 @@ Object.assign(AggroBot, {
 
         "time_before_new_year": () => {
             const now = new Date();
-            return now.getMonth() == 11 && now.getDate() >= 10;
+            return now.getMonth() == 11 && now.getDate() >= 8;
         },
 
         "time_after_new_year": () => {
@@ -2843,7 +2857,7 @@ AggroBot.VK = class {
 
             // Проверка ссылки
             if (this.url) return reject(this.url == url ? AggroBot.VK.Error.SAME_PROFILE : AggroBot.VK.Error.ANOTHER_PROFILE);
-            if (url == AggroBot.vkCustomURL || url == AggroBot.vkIdURL) return reject(AggroBot.VK.Error.SAME_PROFILE);
+            if (url == AggroBot.vkCustomURL || url == AggroBot.vkIdURL) return reject(AggroBot.VK.Error.BOT_PROFILE);
             if (url == "id0") return reject(AggroBot.VK.Error.ID_0);
 
             this._tempURL = url;
